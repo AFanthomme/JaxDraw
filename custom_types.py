@@ -1,11 +1,17 @@
 import jax
 import jax.numpy as jnp
-from functools import partial
-from dataclasses import dataclass, field
-from typing import Tuple, Protocol, Optional
-from jaxtyping import Float, Array, Key
+import chex 
+from typing import Tuple, Protocol, Optional, TypeVar, Type, dataclass_transform
+from jaxtyping import Float, Array, Key, Bool
 
-# These will be used by pylance and should help make things cleaner
+T = TypeVar("T")
+
+@dataclass_transform()
+class JaxDataclass:
+    """Base class that fixes Pylance hints and provides .replace()"""
+    def replace(self: T, **kwargs) -> T:
+        # In a real scenario, this is overwritten by chex at runtime
+        ...
 
 # Heavy, not to be carried, image types
 type FullCanvas = Float[Array, "H W 3"]
@@ -30,28 +36,29 @@ type MovementVector = Float[Array, "2"]
 type PressureValue = Float[Array, "1"]
 """Float[Array, "1"], Value range [-1, 1]; negative means not drawing"""
 
+type Stroke = Float[Array, "4"]
+"""Float[Array, "4"], x_start, y_start, x_end, y_end; values in [0, 1]; (start,end) expected to be lexicographically ordered"""
+
 type TargetStrokesCollection = Float[Array, "S 4"]
-"""Float[Array, "S 4"], Each of the S strokes is x_1, y_1, x_2, y_2; values in [0, 1]"""
+"""Float[Array, "S 4"], Each of the S strokes is (x_start, y_start, x_end, y_end); values in [0, 1]"""
 
 type DrawnStrokesCollection = Float[Array, "T 4"]
-"""Float[Array, "T 4"], T is max trial length, ie max strokes possible\n each of the T strokes is x_1, y_1, x_2, y_2; values in [0, 1]"""
+"""Float[Array, "T 4"], T is max trial length, ie max strokes possible; each of the T strokes is (x_start, y_start, x_end, y_end); values in [0, 1]; (start,end) expected to be lexicographically ordered"""
 
 type StrokesCollection = DrawnStrokesCollection | TargetStrokesCollection
-"""Float[Array, "S|T 4"], x_1, y_1, x_2, y_2, first dim shape depends whether those are targets or drawn"""
+"""Float[Array, "S|T 4"], (x_start, y_start, x_end, y_end) (start,end) expected to be lexicographically ordered, first dim shape depends whether those are targets or drawn"""
 
-type TargetCoverageQuality = Float[Array, "S"]
-"""Float[Array, "S"], Gives a score (in [0,1]) to how much a given TargetStroke corresponds to at least one TargetStroke"""
-
-
-type DrawnCoverageQuality = Float[Array, "T"]
-"""Float[Array, "T"], Gives a score (in [0,1]) to how much each DrawnStroke corresponds to at least one DrawnStroke"""
+type TargetStrokesStatus = Bool[Array, "S"]
+"""Bool[Array, "S"], for each target stroke if has been correctly covered"""
 
 type TrialStep = int
-"""int, Number of elapsed timesteps within one trial (not to be confused with BlockStep or TrainStep); values in {0..T-1}"""
+"""Number of elapsed timesteps within one trial (not to be confused with BlockStep or TrainStep); values in {0..T}"""
 
-type PolicyState = Optional[Float[Array, "H"]]
-"""Float[Array, "H"], Vector hidden state for the policy; unused for now but will come with recurrent policies so type it in"""
+type PolicyState = Optional[Float[Array, "H"] | EnvState]
+"""Float[Array, "H"], Vector hidden state for the policy; can also be EnvState in the case of an OraclePolicy"""
 
+type StepReward = Float
+"""Reward obtained by the action; computed by update_stroke_status"""
 
 
 # RNG keys, not sure very useful but might as well keep track of them too
@@ -70,22 +77,21 @@ type BatchRngKey = Key
 # type BlockRngKey = Annotated[Key, "RNG key for a full block, ie G trials of length T (to be split into G keys, one for each trial)"] 
 
 
-@jax.tree_util.register_dataclass
-@dataclass(frozen=True)
+@chex.dataclass(frozen=True)
 class CanvasParams:
-    num_target_strokes: int = field(metadata=dict(static=True), default=4)
-    max_num_strokes: int = field(metadata=dict(static=True), default=20)
-    size: int = field(metadata=dict(static=True), default=128)
-    stroke_min_length: float = field(metadata=dict(static=True), default=0.2)
-    stroke_max_length: float = field(metadata=dict(static=True), default=0.4)
+    num_target_strokes: int = 4
+    max_num_strokes: int = 20
+    size: int = 128
+    stroke_min_length: float = 0.2
+    stroke_max_length: float = 0.4
     # This ensures some gradient to help pinpoint center, but also visible
-    thickness: float = field(metadata=dict(static=True), default=0.005)
-    softness: float = field(metadata=dict(static=True), default=0.01)
-    canvas_dtype: jnp.dtype = field(metadata=dict(static=True), default=jnp.float32)
+    thickness: float = 0.02
+    softness: float = 0.02
+    quality_max_pos_dif: float = .03  
 
-@jax.tree_util.register_dataclass
-@dataclass
-class EnvState:
+
+@chex.dataclass(frozen=True)
+class EnvState(JaxDataclass):
     '''
     Everything done to avoid carrying visual state between timesteps for reduced memory bandwidth
     NOTE: For now, keep rng state out of EnvState for more flexibility, might change later
@@ -93,29 +99,26 @@ class EnvState:
     target_strokes: TargetStrokesCollection
     drawn_strokes: DrawnStrokesCollection
     position: CoordinateVector
-    target_qualities: TargetCoverageQuality
-    drawn_qualities: DrawnCoverageQuality
+    target_strokes_status: TargetStrokesStatus
     trial_step: TrialStep
+    step_reward: StepReward
 
-@jax.tree_util.register_dataclass
-@dataclass
-class StepCarry:
+@chex.dataclass(frozen=True)
+class StepCarry(JaxDataclass):
     policy_state: PolicyState
     env_state: EnvState
 
-@jax.tree_util.register_dataclass
-@dataclass
-class Action:
+@chex.dataclass(frozen=True)
+class Action(JaxDataclass):
     movement: MovementVector
     pressure: PressureValue
 
-@jax.tree_util.register_dataclass
-@dataclass
-class StepOutput:
+@chex.dataclass(frozen=True)
+class StepOutput(JaxDataclass):
     env_state: EnvState
     action: Action
     obs: FullCanvas
 
 class Policy(Protocol):
-    def __call__(self, policy_state: PolicyState, env_state: EnvState, policy_step_rng_key: PolicyStepRngKey, canvas_params: CanvasParams) -> Tuple[PolicyState,Action]:
+    def __call__(self, policy_step_rng_key: PolicyStepRngKey, canvas_params: CanvasParams, policy_state: PolicyState, observation: Optional[FullCanvas]) -> Tuple[PolicyState,Action]:
         ...

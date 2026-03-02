@@ -6,6 +6,21 @@ import jax
 import numpy as np
 import jax.numpy as jnp
 from custom_types import *
+from functools import partial
+
+def canonicalize_strokes(strokes: StrokesCollection|Stroke) -> StrokesCollection|Stroke:
+    """
+    Reorders x1,y1,x2,y2 so that (x1, y1) is always the lexicographically smaller point
+    Should work on both strokes or collections using split/stack
+    """
+    x1, y1, x2, y2 = jnp.split(strokes, 4, axis=-1)
+    is_ordered = (x1 < x2) | ((x1 == x2) & (y1 <= y2))
+    new_x1 = jnp.where(is_ordered, x1, x2)
+    new_y1 = jnp.where(is_ordered, y1, y2)
+    new_x2 = jnp.where(is_ordered, x2, x1)
+    new_y2 = jnp.where(is_ordered, y2, y1)
+    
+    return jnp.concat([new_x1, new_y1, new_x2, new_y2], axis=-1)
 
 def initialize_env_state(env_init_key: EnvInitRngKey, canvas_params: CanvasParams) -> EnvState:
     """
@@ -23,17 +38,16 @@ def initialize_env_state(env_init_key: EnvInitRngKey, canvas_params: CanvasParam
     uncorrected_moves: MovementVector = jax.random.uniform(lengths_key, shape=(n_strokes, 2), minval=-stroke_max_length, maxval=stroke_max_length, dtype=jnp.float32)
     target_ends: CoordinateVector = jnp.clip(target_starts + uncorrected_moves, 2*stroke_thickness, 1.-2*stroke_thickness)
 
-    # TODO: modify TargetStrokesCollection so that start/end are always ordered in the same way? Would make comparisons later easier,
-    # but won't be able to do it for DrawnStrokes so might be useless anyway
-    target_strokes: TargetStrokesCollection = jnp.concat([target_starts, target_ends], axis=-1) # (S,2) (S,2) -> (S,4)
+    target_strokes: TargetStrokesCollection = canonicalize_strokes(jnp.concat([target_starts, target_ends], axis=-1)) # (S,2) (S,2) -> (S,4)
     drawn_strokes: DrawnStrokesCollection = -10*jnp.ones((T, 4), dtype=jnp.float32)
-    target_qualities: TargetCoverageQuality = jnp.zeros(n_strokes)
-    drawn_qualities: DrawnCoverageQuality = jnp.zeros(T)
+    target_strokes_status: TargetStrokesStatus = jnp.zeros(n_strokes, dtype=jnp.bool)
+
 
     start_pos: CoordinateVector = jax.random.uniform(start_pos_key, shape=(2,), minval=2*stroke_thickness, maxval=1.-2*stroke_thickness, dtype=jnp.float32)
     trial_step: TrialStep = 0
+    step_reward: StepReward = 0.
 
-    state = EnvState(target_strokes=target_strokes, drawn_strokes=drawn_strokes, position=start_pos, target_qualities=target_qualities, drawn_qualities=drawn_qualities, trial_step=trial_step)
+    state = EnvState(target_strokes=target_strokes, drawn_strokes=drawn_strokes, position=start_pos, target_strokes_status=target_strokes_status, step_reward=step_reward, trial_step=trial_step)
 
     return state
 
@@ -80,12 +94,53 @@ def generate_observation(env_state: EnvState, canvas_params: CanvasParams) -> Fu
     return jnp.stack((pos_canvas, draw_canvas, target_canvas), axis=0)
 
 
-# def update_line_qualities(env_state: EnvState):
-#     """
-#     For now, compute this based solely on start-end; could probably compute the dice implicitly 
-#     (would be better once we use more complex shapes?) but would require individual frames in obs
-#     making it significantly more computationally expensive
-#     """
+def update_stroke_status(env_state: EnvState, canvas_params: CanvasParams) -> EnvState:
+    """
+    For now, compute this based solely on start-end; could probably compute the dice implicitly 
+    (would be better once we use more complex shapes or do more granular movement) but 
+    would require individual frames in obs making it significantly more computationally expensive.
+
+    NOTE: Strokes are expected to already be in lexicographic order, but not used to avoid brittle edges
+    """
+    latest_stroke = env_state.drawn_strokes[env_state.trial_step]
+
+    # this does not work yet
+    def is_valid_match(test_stroke: Stroke, target_stroke: Stroke):
+        """
+        Checks if test_stroke matches ref_stroke based on endpoint proximity
+        Tests all pairings of endpoints in parallel, and ensures not both test endpoints are close to the same target
+        """
+        threshold = canvas_params.quality_max_pos_dif
+
+        # Compute all 4 pairwise squared distances via broadcasting
+        t_pts = test_stroke.reshape(2, 2)
+        r_pts = target_stroke.reshape(2, 2)
+        diffs = t_pts[:, None, :] - r_pts[None, :, :]
+        dist_sq = jnp.sum(diffs**2, axis=-1)
+        
+        # Check that each test endpoint is within threshold of SOME ref endpoint
+        min_dists_sq = jnp.min(dist_sq, axis=1)
+        within_threshold = jnp.all(min_dists_sq < threshold**2)
+        
+        # Check that both test endpoints are not closest to the same ref endpoint
+        closest_ref_indices = jnp.argmin(dist_sq, axis=1)
+        distinct_endpoints = closest_ref_indices[0] != closest_ref_indices[1]
+        
+        return within_threshold & distinct_endpoints
+    
+    current_matches = jax.vmap(is_valid_match, in_axes=(None, 0))(latest_stroke, env_state.target_strokes)
+    old_status = env_state.target_strokes_status
+
+    # Get a reward only if the match is really new
+    step_reward = jnp.any(current_matches & (~old_status)).astype(jnp.float32)
+
+    # Update the line status
+    new_status = current_matches | old_status
+    env_state = env_state.replace(target_strokes_status=new_status)
+    env_state = env_state.replace(step_reward=step_reward)
+
+    return env_state
+
 
 def update_env_state_from_action(env_state: EnvState, action: Action, canvas_params: CanvasParams) -> EnvState:
     """
@@ -96,29 +151,63 @@ def update_env_state_from_action(env_state: EnvState, action: Action, canvas_par
     proposed_line = jnp.concat((old_position, new_position), axis=-1)
     default_drawn_line_state: Float[Array, "4"] = -10*jnp.ones(4, dtype=jnp.float32)
     new_line_state = (1-action.pressure) * default_drawn_line_state + action.pressure * proposed_line
+    new_drawn_strokes = env_state.drawn_strokes.at[env_state.trial_step].set(canonicalize_strokes(new_line_state))
+    env_state = env_state.replace(drawn_strokes=new_drawn_strokes)
+    env_state = env_state.replace(position=new_position)
 
-    # This might trigger a copy, or get XLA-optimized away; in any case, those are all small so should not be disastrous
-    env_state.drawn_strokes = env_state.drawn_strokes.at[env_state.trial_step].set(new_line_state)
-    env_state.position = new_position
-    env_state.trial_step = env_state.trial_step + 1
+    env_state = update_stroke_status(env_state, canvas_params)
+    env_state = env_state.replace(trial_step=env_state.trial_step + 1)
 
     return env_state
 
 
-def random_agent_policy(policy_state: PolicyState, env_state: EnvState, policy_step_rng_key: PolicyStepRngKey, canvas_params: CanvasParams) -> Tuple[PolicyState, Action]:
+def random_agent_policy(policy_step_rng_key: PolicyStepRngKey, canvas_params: CanvasParams, policy_state: Optional[PolicyState], observation: Optional[FullCanvas]) -> Tuple[PolicyState, Action]:
     """
     Here for testing / interface clarification only.
-    TODO: implement oracle policy
     """
     stroke_max_length = canvas_params.stroke_max_length
     movement_key, pressure_key = jax.random.split(policy_step_rng_key)
     movement = jax.random.uniform(movement_key, shape=(2,), minval=-stroke_max_length, maxval=stroke_max_length, dtype=jnp.float32)
     pressure = jax.random.bernoulli(pressure_key, p=0.5, shape=(1,))
+
+    # NOTE: This is where policy would get updated
     new_policy_state = policy_state
     return new_policy_state, Action(movement=movement, pressure=pressure)
 
 
+def oracle_policy(policy_step_rng_key: PolicyStepRngKey, canvas_params: CanvasParams, env_state: EnvState, observation: Optional[FullCanvas]) -> Tuple[PolicyState, Action]:
+    """
+    Having access to env_state is cheating, but that's what Oracles are all about
 
+    Can probably do cleaner/better
+    """
+    # Make a (2S, 2) list of strokes
+    endpoints = jnp.concat(jnp.split(env_state.target_strokes, 2, -1), axis=0)
+    status = jnp.tile(env_state.target_strokes_status, 2)
+    line_ids = jnp.tile(jnp.arange(canvas_params.num_target_strokes), 2)
+    position: CoordinateVector = env_state.position
+
+    dists = jnp.sum((position[None, :] - endpoints)**2, -1)
+    filtered_dists = jnp.where(status, 2**10, dists) # put done lines' endpoints at infinity
+    min_dist = jnp.min(filtered_dists)
+    # Will draw only if we're already at an endpoint and not all lines done; not need to check all lines done since min_dist would go to infty anyway
+    # in that case, move to the far_point (which is a pain to determine without branching)
+    pressure = (min_dist < canvas_params.quality_max_pos_dif**2)
+
+    # TODO: this does not work as is, not clear if problem here or in update_status, but keep doing same line 
+    target_line_id = line_ids[jnp.argmin(filtered_dists)]
+    point1, point2 = jnp.split(env_state.target_strokes[target_line_id], 2)
+    dist1, dist2 = jnp.sum((position-point1)**2), jnp.sum((position-point2)**2)
+    close_point = jnp.where(dist1<=dist2, point1, point2)
+    far_point = jnp.where(dist1<=dist2, point2, point1)
+    target_endpoint = jnp.where(pressure, far_point, close_point)
+
+    # Don't move if all lines already done
+    movement = jnp.where(jnp.all(status), jnp.zeros(2, dtype=jnp.float32), target_endpoint - position)
+
+    # NOTE: This is where policy would get updated
+    new_policy_state = env_state
+    return new_policy_state, Action(movement=movement, pressure=pressure)
 
 @partial(jax.jit, static_argnums=(1,2,))
 def rollout_one_trial(trial_rng_key: TrialRngKey, policy_fn: Policy, canvas_params: CanvasParams):
@@ -127,20 +216,18 @@ def rollout_one_trial(trial_rng_key: TrialRngKey, policy_fn: Policy, canvas_para
     """
     initial_key, rollout_key = jax.random.split(trial_rng_key)
     initial_state = initialize_env_state(initial_key, canvas_params)
-    initial_carry = StepCarry(env_state=initial_state, policy_state=None)
+    initial_carry = StepCarry(env_state=initial_state, policy_state=initial_state)
 
     steps_keys = jax.random.split(rollout_key, canvas_params.max_num_strokes)
 
-    # NOTE: this is the only valid signature for jax.scan body_fn: carry, step_input -> new_carry, output
-    # TODO: handle terminated episodes? Since will compute anyway, not sure it makes sense
     def step_fn(carry: StepCarry, steps_keys):
-        env_state = carry.env_state
-        policy_state = carry.policy_state
-        obs = generate_observation(env_state, canvas_params)
-        new_policy_state, action = policy_fn(policy_state, env_state, steps_keys, canvas_params=canvas_params)
-        new_env_state = update_env_state_from_action(env_state, action, canvas_params)
-        new_carry = StepCarry(policy_state=new_policy_state, env_state=env_state)
-        return new_carry, StepOutput(env_state=new_env_state, action=action, obs=obs)
+        obs = generate_observation(carry.env_state, canvas_params)
+        # NOTE: despite obs being unused, can still pass it since it is removed at jit-time
+        new_policy_state, action = policy_fn(steps_keys, canvas_params, carry.env_state, obs)
+        new_env_state = update_env_state_from_action(carry.env_state, action, canvas_params)
+        new_carry = carry.replace(policy_state=new_policy_state, env_state=new_env_state)
+        output = StepOutput(env_state=new_env_state, action=action, obs=obs)
+        return new_carry, output
 
     final_state, output_history = jax.lax.scan(step_fn, initial_carry, steps_keys)
     return output_history
@@ -164,12 +251,14 @@ if __name__ == '__main__':
             batch_rng_key = jax.random.key(777+batch)
             subkeys = jax.random.split(batch_rng_key, batch_size)
             tic = time.time()
-            batch_history = batch_loop_fn(subkeys, random_agent_policy, default_canvas_params)
+            # batch_history = batch_loop_fn(subkeys, random_agent_policy, default_canvas_params)
+            batch_history = batch_loop_fn(subkeys, oracle_policy, default_canvas_params)
             times.append(time.time()-tic)
             batch_observations = (256* np.asarray(batch_history.obs, dtype=np.float64)).astype(np.uint8)
             batch_observations = batch_observations.transpose(0,1,3,4,2)
-            logging.critical(f"Batch {batch} done in {times[-1]:.5f}s")
+            logging.critical(f"Batch {batch} done in {times[-1]:.5f}s, total rewards: {np.asarray(batch_history.env_state.step_reward, dtype=np.float64).sum()}")
             for b_idx in range(5):
+                # TODO: add visualization for the reward, make this standalone for reuse
                 images = [Image.fromarray(batch_observations[b_idx,t]) for t in range(batch_observations.shape[1])]
                 images[0].save(save_path / f'sanity_check_batch_{batch}_trajectory_{b_idx}.gif', save_all=True,
                 append_images=images[1:], # append rest of the images
