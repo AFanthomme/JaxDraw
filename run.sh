@@ -1,0 +1,2 @@
+# . is current directory, this should clean container and venv volume on exit
+docker run  --gpus all --rm --volume .:/app --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 -it $(docker build -q .) "$@" 
