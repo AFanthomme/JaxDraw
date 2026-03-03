@@ -6,7 +6,10 @@ import jax
 import numpy as np
 import jax.numpy as jnp
 from custom_types import *
-from functools import partial
+import time
+from PIL import Image
+import logging
+from pathlib import Path
 
 def canonicalize_strokes(strokes: StrokesCollection|Stroke) -> StrokesCollection|Stroke:
     """
@@ -22,7 +25,7 @@ def canonicalize_strokes(strokes: StrokesCollection|Stroke) -> StrokesCollection
     
     return jnp.concat([new_x1, new_y1, new_x2, new_y2], axis=-1)
 
-def initialize_env_state(env_init_key: EnvInitRngKey, canvas_params: CanvasParams) -> EnvState:
+def initialize_env_state(env_init_key: Key, canvas_params: CanvasParams) -> EnvState:
     """
     Draw starts/ends far from edges to avoid issues with too short lines (note that start/end are not ordered in any meaningful way)
     """
@@ -41,7 +44,6 @@ def initialize_env_state(env_init_key: EnvInitRngKey, canvas_params: CanvasParam
     target_strokes: TargetStrokesCollection = canonicalize_strokes(jnp.concat([target_starts, target_ends], axis=-1)) # (S,2) (S,2) -> (S,4)
     drawn_strokes: DrawnStrokesCollection = -10*jnp.ones((T, 4), dtype=jnp.float32)
     target_strokes_status: TargetStrokesStatus = jnp.zeros(n_strokes, dtype=jnp.bool)
-
 
     start_pos: CoordinateVector = jax.random.uniform(start_pos_key, shape=(2,), minval=2*stroke_thickness, maxval=1.-2*stroke_thickness, dtype=jnp.float32)
     trial_step: TrialStep = 0
@@ -93,7 +95,6 @@ def generate_observation(env_state: EnvState, canvas_params: CanvasParams) -> Fu
 
     return jnp.stack((pos_canvas, draw_canvas, target_canvas), axis=0)
 
-
 def update_stroke_status(env_state: EnvState, canvas_params: CanvasParams) -> EnvState:
     """
     For now, compute this based solely on start-end; could probably compute the dice implicitly 
@@ -116,14 +117,16 @@ def update_stroke_status(env_state: EnvState, canvas_params: CanvasParams) -> En
         t_pts = test_stroke.reshape(2, 2)
         r_pts = target_stroke.reshape(2, 2)
         diffs = t_pts[:, None, :] - r_pts[None, :, :]
-        dist_sq = jnp.sum(diffs**2, axis=-1)
+        # Use L_infty distance for easier noise manipulation
+        dist = jnp.max(jnp.abs(diffs), axis=-1)
         
         # Check that each test endpoint is within threshold of SOME ref endpoint
-        min_dists_sq = jnp.min(dist_sq, axis=1)
-        within_threshold = jnp.all(min_dists_sq < threshold**2)
+        min_dists_sq = jnp.min(dist, axis=1)
+        within_threshold = jnp.all(min_dists_sq < threshold)
         
         # Check that both test endpoints are not closest to the same ref endpoint
-        closest_ref_indices = jnp.argmin(dist_sq, axis=1)
+        l2_dist = jnp.sum((diffs**2), axis=-1)
+        closest_ref_indices = jnp.argmin(l2_dist, axis=1)
         distinct_endpoints = closest_ref_indices[0] != closest_ref_indices[1]
         
         return within_threshold & distinct_endpoints
@@ -141,16 +144,15 @@ def update_stroke_status(env_state: EnvState, canvas_params: CanvasParams) -> En
 
     return env_state
 
-
 def update_env_state_from_action(env_state: EnvState, action: Action, canvas_params: CanvasParams) -> EnvState:
     """
     Basic flow control without branching to decide whether we update the DrawnStrokes or not
     """
     old_position = env_state.position
-    new_position = jnp.clip(env_state.position + action.movement, canvas_params.thickness, 1.-canvas_params.thickness) 
+    new_position = jnp.clip(env_state.position + action[:2], canvas_params.thickness, 1.-canvas_params.thickness) 
     proposed_line = jnp.concat((old_position, new_position), axis=-1)
     default_drawn_line_state: Float[Array, "4"] = -10*jnp.ones(4, dtype=jnp.float32)
-    new_line_state = (1-action.pressure) * default_drawn_line_state + action.pressure * proposed_line
+    new_line_state = (1-action[2]) * default_drawn_line_state + action[2] * proposed_line
     new_drawn_strokes = env_state.drawn_strokes.at[env_state.trial_step].set(canonicalize_strokes(new_line_state))
     env_state = env_state.replace(drawn_strokes=new_drawn_strokes)
     env_state = env_state.replace(position=new_position)
@@ -160,8 +162,7 @@ def update_env_state_from_action(env_state: EnvState, action: Action, canvas_par
 
     return env_state
 
-
-def random_agent_policy(policy_step_rng_key: PolicyStepRngKey, canvas_params: CanvasParams, policy_state: Optional[PolicyState], observation: Optional[FullCanvas]) -> Tuple[PolicyState, Action]:
+def random_agent_policy(policy_step_rng_key: Key, canvas_params: CanvasParams, agent_state: Optional[AgentState], env_state: EnvState, observation: Optional[FullCanvas]) -> Tuple[AgentState, Action]:
     """
     Here for testing / interface clarification only.
     """
@@ -171,11 +172,10 @@ def random_agent_policy(policy_step_rng_key: PolicyStepRngKey, canvas_params: Ca
     pressure = jax.random.bernoulli(pressure_key, p=0.5, shape=(1,))
 
     # NOTE: This is where policy would get updated
-    new_policy_state = policy_state
-    return new_policy_state, Action(movement=movement, pressure=pressure)
+    new_policy_state = agent_state
+    return new_policy_state, jnp.concat((movement, pressure))
 
-
-def oracle_policy(policy_step_rng_key: PolicyStepRngKey, canvas_params: CanvasParams, env_state: EnvState, observation: Optional[FullCanvas]) -> Tuple[PolicyState, Action]:
+def oracle_policy(policy_step_rng_key: Key, canvas_params: CanvasParams, policy_state: Optional[AgentState], env_state: EnvState, observation: Optional[FullCanvas]) -> Tuple[AgentState, Action]:
     """
     Having access to env_state is cheating, but that's what Oracles are all about
 
@@ -194,7 +194,6 @@ def oracle_policy(policy_step_rng_key: PolicyStepRngKey, canvas_params: CanvasPa
     # in that case, move to the far_point (which is a pain to determine without branching)
     pressure = (min_dist < canvas_params.quality_max_pos_dif**2)
 
-    # TODO: this does not work as is, not clear if problem here or in update_status, but keep doing same line 
     target_line_id = line_ids[jnp.argmin(filtered_dists)]
     point1, point2 = jnp.split(env_state.target_strokes[target_line_id], 2)
     dist1, dist2 = jnp.sum((position-point1)**2), jnp.sum((position-point2)**2)
@@ -205,64 +204,72 @@ def oracle_policy(policy_step_rng_key: PolicyStepRngKey, canvas_params: CanvasPa
     # Don't move if all lines already done
     movement = jnp.where(jnp.all(status), jnp.zeros(2, dtype=jnp.float32), target_endpoint - position)
 
-    # NOTE: This is where policy would get updated
-    new_policy_state = env_state
-    return new_policy_state, Action(movement=movement, pressure=pressure)
+    return None, jnp.concat((movement, jnp.array([pressure])))
 
-@partial(jax.jit, static_argnums=(1,2,))
-def rollout_one_trial(trial_rng_key: TrialRngKey, policy_fn: Policy, canvas_params: CanvasParams):
+def noisy_oracle_policy(policy_step_rng_key: Key, canvas_params: CanvasParams, policy_state: Optional[AgentState], env_state: EnvState, observation: Optional[FullCanvas]) -> Tuple[AgentState, Action]:
+    """
+    Allows for slightly imperfect trajectories
+    """
+    _, oracle_actions = oracle_policy(policy_step_rng_key, canvas_params, policy_state, env_state, observation)
+    action_noise = jnp.array([0.9, 0.9, 0.]) * canvas_params.quality_max_pos_dif * jax.random.uniform(policy_step_rng_key, shape=(3,))
+    return None, oracle_actions + action_noise
+
+def rollout_one_evaluation_trial(trial_rng_key: Key, agent_policy: Policy, agent_state_init_fn: AgentStateInitializer, oracle_policy: Policy, canvas_params: CanvasParams, oracle_forcing: Bool=False):
     """
     Does an entire trial rollout, from initialization to closure.
     """
     initial_key, rollout_key = jax.random.split(trial_rng_key)
-    initial_state = initialize_env_state(initial_key, canvas_params)
-    initial_carry = StepCarry(env_state=initial_state, policy_state=initial_state)
+    env_init_key, agent_init_key = jax.random.split(initial_key)
+    initial_env_state = initialize_env_state(env_init_key, canvas_params)
+    initial_agent_state = agent_state_init_fn(agent_init_key)
+    initial_carry = StepCarry(env_state=initial_env_state, agent_state=initial_agent_state)
 
     steps_keys = jax.random.split(rollout_key, canvas_params.max_num_strokes)
 
     def step_fn(carry: StepCarry, steps_keys):
         obs = generate_observation(carry.env_state, canvas_params)
-        # NOTE: despite obs being unused, can still pass it since it is removed at jit-time
-        new_policy_state, action = policy_fn(steps_keys, canvas_params, carry.env_state, obs)
-        new_env_state = update_env_state_from_action(carry.env_state, action, canvas_params)
-        new_carry = carry.replace(policy_state=new_policy_state, env_state=new_env_state)
-        output = StepOutput(env_state=new_env_state, action=action, obs=obs)
+        # Not forcing env_state to None here because we can use oracle as agent too 
+        new_agent_state, agent_action = agent_policy(steps_keys, canvas_params, carry.agent_state, carry.env_state, obs)
+        _, oracle_action = oracle_policy(steps_keys, canvas_params, None, carry.env_state, obs)
+        new_env_state = update_env_state_from_action(carry.env_state, (1.-oracle_forcing)*agent_action+ oracle_forcing*oracle_action, canvas_params)
+        new_carry = carry.replace(agent_state=new_agent_state, env_state=new_env_state)
+        output = StepOutput(env_state=new_env_state, agent_state=new_agent_state, agent_action=agent_action, oracle_action=oracle_action, obs=obs)
         return new_carry, output
 
-    final_state, output_history = jax.lax.scan(step_fn, initial_carry, steps_keys)
+    _, output_history = jax.lax.scan(step_fn, initial_carry, steps_keys)
     return output_history
 
+def perform_tests(batch_size=32, n_reps=10, save_path = Path('tests/single_rule_single_trial/observation_gifs')):
+    save_path.mkdir(exist_ok=True, parents=True)
+    logging.critical("Starting test rollouts")
+    default_canvas_params = CanvasParams()
+    batch_loop_fn = jax.vmap(rollout_one_evaluation_trial, in_axes=(0, None, None, None, None, None))
+
+    jitted_batch_fn = jax.jit(
+        batch_loop_fn, 
+        static_argnums=(1, 2, 3, 4, 5)
+    )
+
+    def agent_state_dummy_init(key: Key) -> AgentState:
+        return None
+
+    times = []
+    for batch in range(n_reps):
+        batch_rng_key = jax.random.key(777+batch)
+        subkeys = jax.random.split(batch_rng_key, batch_size)
+        tic = time.time()
+        batch_history = jitted_batch_fn(subkeys, noisy_oracle_policy, agent_state_dummy_init, oracle_policy, default_canvas_params, False)
+        times.append(time.time()-tic)
+        batch_observations = (256* np.asarray(batch_history.obs, dtype=np.float64)).astype(np.uint8)
+        batch_observations = batch_observations.transpose(0,1,3,4,2)
+        logging.critical(f"Batch {batch} done in {times[-1]:.5f}s, total rewards: {np.asarray(batch_history.env_state.step_reward, dtype=np.float64).sum()}")
+        for b_idx in range(5):
+            # TODO: add visualization for the reward
+            images = [Image.fromarray(batch_observations[b_idx,t]) for t in range(batch_observations.shape[1])]
+            images[0].save(save_path / f'sanity_check_batch_{batch}_trajectory_{b_idx}.gif', save_all=True,
+            append_images=images[1:], # append rest of the images
+            duration=1000, # in milliseconds
+            loop=0)
+
 if __name__ == '__main__':
-    import time
-    from PIL import Image
-    import os
-    import logging
-    from pathlib import Path
-    def test_rollout():
-        logging.critical("Starting rollout tests")
-        batch_size = 128
-        default_canvas_params = CanvasParams()
-        save_path = Path('tests/single_rule_single_trial/observation_gifs')
-        save_path.mkdir(exist_ok=True, parents=True)
-
-        batch_loop_fn = jax.vmap(rollout_one_trial, in_axes=(0, None, None))
-        times = []
-        for batch in range(10):
-            batch_rng_key = jax.random.key(777+batch)
-            subkeys = jax.random.split(batch_rng_key, batch_size)
-            tic = time.time()
-            # batch_history = batch_loop_fn(subkeys, random_agent_policy, default_canvas_params)
-            batch_history = batch_loop_fn(subkeys, oracle_policy, default_canvas_params)
-            times.append(time.time()-tic)
-            batch_observations = (256* np.asarray(batch_history.obs, dtype=np.float64)).astype(np.uint8)
-            batch_observations = batch_observations.transpose(0,1,3,4,2)
-            logging.critical(f"Batch {batch} done in {times[-1]:.5f}s, total rewards: {np.asarray(batch_history.env_state.step_reward, dtype=np.float64).sum()}")
-            for b_idx in range(5):
-                # TODO: add visualization for the reward, make this standalone for reuse
-                images = [Image.fromarray(batch_observations[b_idx,t]) for t in range(batch_observations.shape[1])]
-                images[0].save(save_path / f'sanity_check_batch_{batch}_trajectory_{b_idx}.gif', save_all=True,
-                append_images=images[1:], # append rest of the images
-                duration=1000, # in milliseconds
-                loop=0)
-
-    test_rollout()
+    perform_tests()

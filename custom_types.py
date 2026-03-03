@@ -14,8 +14,8 @@ class JaxDataclass:
         ...
 
 # Heavy, not to be carried, image types
-type FullCanvas = Float[Array, "H W 3"]
-"""Float[Array, "H W 3"], 3 is for RGB, aka pos, drawn, target; Value range [0, 1[ for correct image conversion"""
+type FullCanvas = Float[Array, "3 H W"]
+"""Float[Array, "3 H W"], 3 is for RGB, aka pos, drawn, target; Value range [0, 1[ for correct image conversion"""
 
 type SingleFrame = Float[Array, "H W"]
 """Float[Array, "H W"], Value range [0, 1[ for correct image conversion"""
@@ -36,6 +36,9 @@ type MovementVector = Float[Array, "2"]
 type PressureValue = Float[Array, "1"]
 """Float[Array, "1"], Value range [-1, 1]; negative means not drawing"""
 
+type Action = Float[Array, "3"]
+"""Float[Array, "3"], Value range [-1, 1], movement_vector and pressure vector concatenated"""
+
 type Stroke = Float[Array, "4"]
 """Float[Array, "4"], x_start, y_start, x_end, y_end; values in [0, 1]; (start,end) expected to be lexicographically ordered"""
 
@@ -54,36 +57,20 @@ type TargetStrokesStatus = Bool[Array, "S"]
 type TrialStep = int
 """Number of elapsed timesteps within one trial (not to be confused with BlockStep or TrainStep); values in {0..T}"""
 
-type PolicyState = Optional[Float[Array, "H"] | EnvState]
-"""Float[Array, "H"], Vector hidden state for the policy; can also be EnvState in the case of an OraclePolicy"""
+type AgentState = Optional[Float[Array, "H"]]
+"""Float[Array, "H"], Vector hidden state for the policyy"""
 
 type StepReward = Float
 """Reward obtained by the action; computed by update_stroke_status"""
 
 
-# RNG keys, not sure very useful but might as well keep track of them too
-type EnvInitRngKey = Key
-"""RNG key for the initialization of the environment state"""
-type PolicyStepRngKey = Key
-"""RNG key for the current step of the policy"""
-type EnvStepRngKey = Key
-"""RNG key for the current step of the environment; useful if need reset (then used as init key) or to add agent-independent noise"""
-type TrialRngKey = Key
-"""RNG key for a full trial, ie T steps of env/policy; to be split into 2T keys (env, policy for each step)"""
-type BatchRngKey = Key
-"""RNG key for a batch of B trials, to be split into B keys (one for each trial in the batch)"""
-
-# Future: 
-# type BlockRngKey = Annotated[Key, "RNG key for a full block, ie G trials of length T (to be split into G keys, one for each trial)"] 
-
-
 @chex.dataclass(frozen=True)
 class CanvasParams:
-    num_target_strokes: int = 4
-    max_num_strokes: int = 20
+    num_target_strokes: int = 2
+    max_num_strokes: int = 6
     size: int = 128
-    stroke_min_length: float = 0.2
-    stroke_max_length: float = 0.4
+    stroke_min_length: float = 0.1
+    stroke_max_length: float = 0.7
     # This ensures some gradient to help pinpoint center, but also visible
     thickness: float = 0.02
     softness: float = 0.02
@@ -105,20 +92,26 @@ class EnvState(JaxDataclass):
 
 @chex.dataclass(frozen=True)
 class StepCarry(JaxDataclass):
-    policy_state: PolicyState
+    agent_state: AgentState
     env_state: EnvState
-
-@chex.dataclass(frozen=True)
-class Action(JaxDataclass):
-    movement: MovementVector
-    pressure: PressureValue
 
 @chex.dataclass(frozen=True)
 class StepOutput(JaxDataclass):
     env_state: EnvState
-    action: Action
-    obs: FullCanvas
+    agent_state: AgentState
+    agent_action: Action
+    oracle_action: Optional[Action]
+    obs: Optional[FullCanvas]
+
 
 class Policy(Protocol):
-    def __call__(self, policy_step_rng_key: PolicyStepRngKey, canvas_params: CanvasParams, policy_state: PolicyState, observation: Optional[FullCanvas]) -> Tuple[PolicyState,Action]:
+    '''
+    Oracle policies also has access to underlying environment state on top of its own state and the observation.
+    Agent policies should never use env_state !
+    '''
+    def __call__(self, rng_key: Key, canvas_params: CanvasParams, policy_state: Optional[AgentState], env_state: Optional[EnvState], observation: Optional[FullCanvas]) -> Tuple[AgentState,Action]:
+        ...
+
+class AgentStateInitializer(Protocol):
+    def __call__(self, rng_key: Key) -> AgentState:
         ...

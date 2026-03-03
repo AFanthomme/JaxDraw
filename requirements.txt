@@ -1,4 +1,6 @@
 jax
+equinox
+optax
 chex
 pillow
 jaxtyping
