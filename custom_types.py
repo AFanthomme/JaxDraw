@@ -66,8 +66,11 @@ type StepReward = Float
 
 @chex.dataclass(frozen=True)
 class CanvasParams:
-    num_target_strokes: int = 2
-    max_num_strokes: int = 6
+    # num_target_strokes: int = 2
+    # max_num_strokes: int = 6
+    num_target_strokes: int = 4
+    max_num_strokes: int = 20
+
     size: int = 128
     stroke_min_length: float = 0.1
     stroke_max_length: float = 0.7
@@ -100,7 +103,7 @@ class StepOutput(JaxDataclass):
     env_state: EnvState
     agent_state: AgentState
     agent_action: Action
-    oracle_action: Optional[Action]
+    reference_action: Optional[Action]
     obs: Optional[FullCanvas]
 
 

@@ -144,9 +144,9 @@ def update_stroke_status(env_state: EnvState, canvas_params: CanvasParams) -> En
 
     return env_state
 
-def update_env_state_from_action(env_state: EnvState, action: Action, canvas_params: CanvasParams) -> EnvState:
+def update_env_state_from_action(rng_key: Key, env_state: EnvState, action: Action, canvas_params: CanvasParams) -> EnvState:
     """
-    Basic flow control without branching to decide whether we update the DrawnStrokes or not
+    Environment update could, in theory, be non-deterministic so introduce support here
     """
     old_position = env_state.position
     new_position = jnp.clip(env_state.position + action[:2], canvas_params.thickness, 1.-canvas_params.thickness) 
@@ -214,40 +214,48 @@ def noisy_oracle_policy(policy_step_rng_key: Key, canvas_params: CanvasParams, p
     action_noise = jnp.array([0.9, 0.9, 0.]) * canvas_params.quality_max_pos_dif * jax.random.uniform(policy_step_rng_key, shape=(3,))
     return None, oracle_actions + action_noise
 
-def rollout_one_evaluation_trial(trial_rng_key: Key, agent_policy: Policy, agent_state_init_fn: AgentStateInitializer, oracle_policy: Policy, canvas_params: CanvasParams, oracle_forcing: Bool=False):
+def rollout_one_trial(env_rng_key: Key, pol_rng_key: Key, agent_policy: Policy, agent_state_init_fn: AgentStateInitializer, ref_policy: Policy, canvas_params: CanvasParams, ref_forcing: Bool=False):
     """
-    Does an entire trial rollout, from initialization to closure.
+    Does an entire trial rollout, from initialization to closure. 
+    By default, use two different policies, but can make ref trivial if not needed
+
+    Use different rng keys for env and policies, that way for non-deterministic
+    policies we can have same env, but different trajectories (eg GRPO and friends).
+    Keep same key for agent and reference policies, let's not overdo it
     """
-    initial_key, rollout_key = jax.random.split(trial_rng_key)
-    env_init_key, agent_init_key = jax.random.split(initial_key)
+    env_init_key, env_rollout_key = jax.random.split(env_rng_key)
+    pol_init_key, pol_rollout_key = jax.random.split(pol_rng_key)
     initial_env_state = initialize_env_state(env_init_key, canvas_params)
-    initial_agent_state = agent_state_init_fn(agent_init_key)
+    initial_agent_state = agent_state_init_fn(pol_init_key)
     initial_carry = StepCarry(env_state=initial_env_state, agent_state=initial_agent_state)
 
-    steps_keys = jax.random.split(rollout_key, canvas_params.max_num_strokes)
+    all_env_steps_keys = jax.random.split(env_rollout_key, canvas_params.max_num_strokes)
+    all_pol_steps_keys = jax.random.split(pol_rollout_key, canvas_params.max_num_strokes)
+    all_steps_keys = jnp.stack([all_env_steps_keys, all_pol_steps_keys], axis=-1)
 
-    def step_fn(carry: StepCarry, steps_keys):
+    def step_fn(carry: StepCarry, step_keys):
+        env_step_key, pol_step_key = jnp.unstack(step_keys, axis=-1)
         obs = generate_observation(carry.env_state, canvas_params)
-        # Not forcing env_state to None here because we can use oracle as agent too 
-        new_agent_state, agent_action = agent_policy(steps_keys, canvas_params, carry.agent_state, carry.env_state, obs)
-        _, oracle_action = oracle_policy(steps_keys, canvas_params, None, carry.env_state, obs)
-        new_env_state = update_env_state_from_action(carry.env_state, (1.-oracle_forcing)*agent_action+ oracle_forcing*oracle_action, canvas_params)
+        # Not forcing env_state to None here because we want to allow oracle as agent too 
+        new_agent_state, agent_action = agent_policy(pol_step_key, canvas_params, carry.agent_state, carry.env_state, obs)
+        _, ref_action = ref_policy(pol_step_key, canvas_params, None, carry.env_state, obs)
+        new_env_state = update_env_state_from_action(env_step_key, carry.env_state, (1.-ref_forcing)*agent_action+ ref_forcing*ref_action, canvas_params)
         new_carry = carry.replace(agent_state=new_agent_state, env_state=new_env_state)
-        output = StepOutput(env_state=new_env_state, agent_state=new_agent_state, agent_action=agent_action, oracle_action=oracle_action, obs=obs)
+        output = StepOutput(env_state=new_env_state, agent_state=new_agent_state, agent_action=agent_action, reference_action=ref_action, obs=obs)
         return new_carry, output
 
-    _, output_history = jax.lax.scan(step_fn, initial_carry, steps_keys)
+    _, output_history = jax.lax.scan(step_fn, initial_carry, all_steps_keys)
     return output_history
 
 def perform_tests(batch_size=32, n_reps=10, save_path = Path('tests/single_rule_single_trial/observation_gifs')):
     save_path.mkdir(exist_ok=True, parents=True)
     logging.critical("Starting test rollouts")
     default_canvas_params = CanvasParams()
-    batch_loop_fn = jax.vmap(rollout_one_evaluation_trial, in_axes=(0, None, None, None, None, None))
+    batch_loop_fn = jax.vmap(rollout_one_trial, in_axes=(0, 0, None, None, None, None, None))
 
     jitted_batch_fn = jax.jit(
         batch_loop_fn, 
-        static_argnums=(1, 2, 3, 4, 5)
+        static_argnums=(2, 3, 4, 5, 6)
     )
 
     def agent_state_dummy_init(key: Key) -> AgentState:
@@ -256,9 +264,11 @@ def perform_tests(batch_size=32, n_reps=10, save_path = Path('tests/single_rule_
     times = []
     for batch in range(n_reps):
         batch_rng_key = jax.random.key(777+batch)
-        subkeys = jax.random.split(batch_rng_key, batch_size)
+        env_key, pol_key = jax.random.split(batch_rng_key)
+        env_subkeys = jax.random.split(env_key, batch_size)
+        pol_subkeys = jax.random.split(pol_key, batch_size)
         tic = time.time()
-        batch_history = jitted_batch_fn(subkeys, noisy_oracle_policy, agent_state_dummy_init, oracle_policy, default_canvas_params, False)
+        batch_history = jitted_batch_fn(env_subkeys, pol_subkeys, noisy_oracle_policy, agent_state_dummy_init, oracle_policy, default_canvas_params, False)
         times.append(time.time()-tic)
         batch_observations = (256* np.asarray(batch_history.obs, dtype=np.float64)).astype(np.uint8)
         batch_observations = batch_observations.transpose(0,1,3,4,2)
