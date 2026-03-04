@@ -57,7 +57,7 @@ type TargetStrokesStatus = Bool[Array, "S"]
 type TrialStep = int
 """Number of elapsed timesteps within one trial (not to be confused with BlockStep or TrainStep); values in {0..T}"""
 
-type AgentState = Optional[Float[Array, "H"]]
+type PolicyState = Optional[Float[Array, "H"]]
 """Float[Array, "H"], Vector hidden state for the policyy"""
 
 type StepReward = Float
@@ -66,10 +66,13 @@ type StepReward = Float
 
 @chex.dataclass(frozen=True)
 class CanvasParams:
-    # num_target_strokes: int = 2
-    # max_num_strokes: int = 6
-    num_target_strokes: int = 4
-    max_num_strokes: int = 20
+    # For debugging:
+    num_target_strokes: int = 2
+    max_num_strokes: int = 6
+
+    # For realsies:
+    # num_target_strokes: int = 4
+    # max_num_strokes: int = 20
 
     size: int = 128
     stroke_min_length: float = 0.1
@@ -95,13 +98,15 @@ class EnvState(JaxDataclass):
 
 @chex.dataclass(frozen=True)
 class StepCarry(JaxDataclass):
-    agent_state: AgentState
+    agent_state: PolicyState
+    reference_state : PolicyState
     env_state: EnvState
 
 @chex.dataclass(frozen=True)
 class StepOutput(JaxDataclass):
     env_state: EnvState
-    agent_state: AgentState
+    agent_state: PolicyState
+    reference_state: PolicyState
     agent_action: Action
     reference_action: Optional[Action]
     obs: Optional[FullCanvas]
@@ -112,9 +117,9 @@ class Policy(Protocol):
     Oracle policies also has access to underlying environment state on top of its own state and the observation.
     Agent policies should never use env_state !
     '''
-    def __call__(self, rng_key: Key, canvas_params: CanvasParams, policy_state: Optional[AgentState], env_state: Optional[EnvState], observation: Optional[FullCanvas]) -> Tuple[AgentState,Action]:
+    def __call__(self, rng_key: Key, policy_state: Optional[PolicyState], env_state: Optional[EnvState], observation: Optional[FullCanvas], canvas_params: CanvasParams) -> Tuple[PolicyState,Action]:
         ...
 
-class AgentStateInitializer(Protocol):
-    def __call__(self, rng_key: Key) -> AgentState:
+class PolicyStateInitializer(Protocol):
+    def __call__(self, rng_key: Key) -> PolicyState:
         ...

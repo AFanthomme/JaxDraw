@@ -162,7 +162,7 @@ def update_env_state_from_action(rng_key: Key, env_state: EnvState, action: Acti
 
     return env_state
 
-def random_agent_policy(policy_step_rng_key: Key, canvas_params: CanvasParams, agent_state: Optional[AgentState], env_state: EnvState, observation: Optional[FullCanvas]) -> Tuple[AgentState, Action]:
+def random_agent_policy(policy_step_rng_key: Key, canvas_params: CanvasParams, agent_state: Optional[PolicyState], env_state: EnvState, observation: Optional[FullCanvas]) -> Tuple[PolicyState, Action]:
     """
     Here for testing / interface clarification only.
     """
@@ -175,7 +175,7 @@ def random_agent_policy(policy_step_rng_key: Key, canvas_params: CanvasParams, a
     new_policy_state = agent_state
     return new_policy_state, jnp.concat((movement, pressure))
 
-def oracle_policy(policy_step_rng_key: Key, canvas_params: CanvasParams, policy_state: Optional[AgentState], env_state: EnvState, observation: Optional[FullCanvas]) -> Tuple[AgentState, Action]:
+def oracle_policy(policy_step_rng_key: Key, policy_state: Optional[PolicyState], env_state: EnvState, observation: Optional[FullCanvas], canvas_params: CanvasParams) -> Tuple[PolicyState, Action]:
     """
     Having access to env_state is cheating, but that's what Oracles are all about
 
@@ -206,74 +206,118 @@ def oracle_policy(policy_step_rng_key: Key, canvas_params: CanvasParams, policy_
 
     return None, jnp.concat((movement, jnp.array([pressure])))
 
-def noisy_oracle_policy(policy_step_rng_key: Key, canvas_params: CanvasParams, policy_state: Optional[AgentState], env_state: EnvState, observation: Optional[FullCanvas]) -> Tuple[AgentState, Action]:
+def noisy_oracle_policy(policy_step_rng_key: Key, policy_state: Optional[PolicyState], env_state: EnvState, observation: Optional[FullCanvas], canvas_params: CanvasParams) -> Tuple[PolicyState, Action]:
     """
     Allows for slightly imperfect trajectories
     NOTE: this can lead to widely diverging trajectories if final endpoint of one line close two other endpoints !
     """
-    _, oracle_actions = oracle_policy(policy_step_rng_key, canvas_params, policy_state, env_state, observation)
+    _, oracle_actions = oracle_policy(policy_step_rng_key, policy_state, env_state, observation, canvas_params)
     action_noise = jnp.array([0.9, 0.9, 0.]) * canvas_params.quality_max_pos_dif * jax.random.uniform(policy_step_rng_key, shape=(3,), minval=-1, maxval=1)
     return None, oracle_actions + action_noise
 
-def rollout_one_trial(env_rng_key: Key, pol_rng_key: Key, agent_policy: Policy, agent_state_init_fn: AgentStateInitializer, ref_policy: Policy, canvas_params: CanvasParams, ref_forcing: Bool=False):
+def rollout_trial_batch(
+                        # Traced
+                        env_rng_key: Key, pol_rng_key: Key,   
+                        # Static
+                        batch_size: int, canvas_params: CanvasParams, ref_forcing: Bool,
+                        agent_policy: Policy, agent_state_init_fn: PolicyStateInitializer, 
+                        ref_policy: Policy, ref_state_init_fn: PolicyStateInitializer,
+                        ):
     """
-    Does an entire trial rollout, from initialization to closure. 
+    Similar to old trial_rollout, but does scan(vmap(step)) instead of vmap(scan)
     By default, use two different policies, but can make ref trivial if not needed
 
     Use different rng keys for env and policies, that way for non-deterministic
     policies we can have same env, but different trajectories (eg GRPO and friends).
     Keep same key for agent and reference policies, let's not overdo it
     """
-    env_init_key, env_rollout_key = jax.random.split(env_rng_key)
-    pol_init_key, pol_rollout_key = jax.random.split(pol_rng_key)
-    initial_env_state = initialize_env_state(env_init_key, canvas_params)
-    initial_agent_state = agent_state_init_fn(pol_init_key)
-    initial_carry = StepCarry(env_state=initial_env_state, agent_state=initial_agent_state)
+    T = canvas_params.max_num_strokes
+    B = batch_size
 
-    all_env_steps_keys = jax.random.split(env_rollout_key, canvas_params.max_num_strokes)
-    all_pol_steps_keys = jax.random.split(pol_rollout_key, canvas_params.max_num_strokes)
-    all_steps_keys = jnp.stack([all_env_steps_keys, all_pol_steps_keys], axis=-1)
+    # NOTE: try to always keep the shared arguments at the end for easier reading
+    batched_generate_obs = jax.vmap(generate_observation, in_axes=(0, None))
+    batched_update_state = jax.vmap(update_env_state_from_action, in_axes=(0, 0, 0, None))
+    batched_agent_policy = jax.vmap(agent_policy, in_axes=(0, 0, 0, 0, None))
+    batched_ref_policy = jax.vmap(ref_policy, in_axes=(0, 0, 0, 0, None))
 
-    def step_fn(carry: StepCarry, step_keys):
-        env_step_key, pol_step_key = jnp.unstack(step_keys, axis=-1)
-        obs = generate_observation(carry.env_state, canvas_params)
-        # Not forcing env_state to None here because we want to allow oracle as agent too 
-        new_agent_state, agent_action = agent_policy(pol_step_key, canvas_params, carry.agent_state, carry.env_state, obs)
-        _, ref_action = ref_policy(pol_step_key, canvas_params, None, carry.env_state, obs)
-        new_env_state = update_env_state_from_action(env_step_key, carry.env_state, (1.-ref_forcing)*agent_action+ ref_forcing*ref_action, canvas_params)
-        new_carry = carry.replace(agent_state=new_agent_state, env_state=new_env_state)
-        output = StepOutput(env_state=new_env_state, agent_state=new_agent_state, agent_action=agent_action, reference_action=ref_action, obs=obs)
+    def step_all_envs(carry: StepCarry, step_keys: Key[Array, "B 2"]):
+        env_step_keys, pol_step_keys = jnp.unstack(step_keys, axis=-1)
+        batch_env_states = carry.env_state
+        batch_agent_states = carry.agent_state
+        batch_ref_states = carry.reference_state
+        batch_obs: Float[Array, "B 3 H W"] = batched_generate_obs(batch_env_states, canvas_params)
+        batch_agent_states, batch_agent_actions = batched_agent_policy(pol_step_keys, batch_agent_states, batch_env_states, batch_obs, canvas_params)
+        batch_ref_states, batch_ref_actions = batched_ref_policy(pol_step_keys, batch_ref_states, batch_env_states, batch_obs, canvas_params)
+        
+        batch_actions = (1.-ref_forcing)*batch_agent_actions + ref_forcing*batch_ref_actions
+        batch_new_env_states = batched_update_state(env_step_keys, batch_env_states, batch_actions, canvas_params)
+        new_carry = carry.replace(agent_state=batch_agent_states, reference_state=batch_ref_states, env_state=batch_new_env_states)
+        output = StepOutput(env_state=batch_new_env_states, agent_state=batch_agent_states, reference_state=batch_ref_states, agent_action=batch_agent_actions, reference_action=batch_ref_actions, obs=batch_obs)
         return new_carry, output
 
-    _, output_history = jax.lax.scan(step_fn, initial_carry, all_steps_keys)
+    batched_initialize_env_states = jax.vmap(initialize_env_state, in_axes=(0, None))
+    init_env_key, rollout_env_key = jax.random.split(env_rng_key, 2)
+    initial_env_states = batched_initialize_env_states(jax.random.split(init_env_key, B), canvas_params)
+
+    batched_ref_state_init = jax.vmap(ref_state_init_fn, in_axes=(0,))
+    batched_agent_state_init = jax.vmap(agent_state_init_fn, in_axes=(0,))
+
+    init_pol_key, rollout_pol_key = jax.random.split(pol_rng_key, 2)
+    init_pol_keys = jax.random.split(init_pol_key, B)
+    # Shared init keys between policies
+    initial_ref_states = batched_ref_state_init(init_pol_keys)
+    initial_agent_states = batched_agent_state_init(init_pol_keys)
+
+    print(initial_env_states)
+    initial_carry = StepCarry(agent_state=initial_agent_states, reference_state=initial_ref_states, env_state=initial_env_states)
+
+    # Slightly convoluted, but allows separating rng between the two for "same env, different realizations of stochastic policy"
+    all_steps_pol_keys = jax.random.split(rollout_pol_key, T*B).reshape(T, B)
+    all_steps_env_keys = jax.random.split(rollout_env_key, T*B).reshape(T, B)
+    all_steps_keys: Key[Array, "T B 2"] = jnp.stack([all_steps_env_keys, all_steps_pol_keys], axis=-1)
+
+    _, output_history = jax.lax.scan(step_all_envs, initial_carry, all_steps_keys)
     return output_history
 
-def perform_tests(batch_size=32, n_reps=10, save_path = Path('tests/single_rule_single_trial/observation_gifs')):
+def sanity_check():
+    n_reps=10
+    save_path = Path('tests/single_rule_single_trial/observation_gifs')
     save_path.mkdir(exist_ok=True, parents=True)
     logging.critical("Starting test rollouts")
+
+    def dummy_state_init(key: Key) -> PolicyState:
+        return None
+
+    B = 64
     default_canvas_params = CanvasParams()
-    batch_loop_fn = jax.vmap(rollout_one_trial, in_axes=(0, 0, None, None, None, None, None))
+    ref_forcing = False    
+    agent_policy = noisy_oracle_policy
+    agent_state_init_fn = dummy_state_init
+    ref_policy = noisy_oracle_policy
+    ref_state_init_fn = dummy_state_init
 
     jitted_batch_fn = jax.jit(
-        batch_loop_fn, 
-        static_argnums=(2, 3, 4, 5, 6)
+        rollout_trial_batch, 
+        static_argnums=(2, 3, 4, 5, 6, 7, 8)
     )
-
-    def agent_state_dummy_init(key: Key) -> AgentState:
-        return None
 
     times = []
     for batch in range(n_reps):
         # Should be same env every two reps, but different realizations of the policy
         env_key = jax.random.key(777+(batch%2))
         pol_key = jax.random.key(777+batch)
-        env_subkeys = jax.random.split(env_key, batch_size)
-        pol_subkeys = jax.random.split(pol_key, batch_size)
         tic = time.time()
-        batch_history = jitted_batch_fn(env_subkeys, pol_subkeys, noisy_oracle_policy, agent_state_dummy_init, oracle_policy, default_canvas_params, False)
+        batch_history = jitted_batch_fn(# Traced
+                                        env_key, pol_key, 
+                                        #Static
+                                        B, default_canvas_params, ref_forcing, 
+                                        agent_policy, agent_state_init_fn, 
+                                        ref_policy, ref_state_init_fn)
         times.append(time.time()-tic)
-        batch_observations = (256* np.asarray(batch_history.obs, dtype=np.float64)).astype(np.uint8)
-        batch_observations = batch_observations.transpose(0,1,3,4,2)
+        obs: Float[Array, "T B 3 H W"] = batch_history.obs
+        obs: Float[Array, "B T H W 3"] = obs.transpose(1,0,3,4,2)
+        batch_observations = (256* np.asarray(obs, dtype=np.float64)).astype(np.uint8)
+        batch_observations = batch_observations
         logging.critical(f"Batch {batch} done in {times[-1]:.5f}s, total rewards: {np.asarray(batch_history.env_state.step_reward, dtype=np.float64).sum()}")
         for b_idx in range(5):
             # TODO: add visualization for the reward
@@ -284,4 +328,4 @@ def perform_tests(batch_size=32, n_reps=10, save_path = Path('tests/single_rule_
             loop=0)
 
 if __name__ == '__main__':
-    perform_tests()
+    sanity_check()
