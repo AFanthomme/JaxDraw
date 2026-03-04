@@ -209,9 +209,10 @@ def oracle_policy(policy_step_rng_key: Key, canvas_params: CanvasParams, policy_
 def noisy_oracle_policy(policy_step_rng_key: Key, canvas_params: CanvasParams, policy_state: Optional[AgentState], env_state: EnvState, observation: Optional[FullCanvas]) -> Tuple[AgentState, Action]:
     """
     Allows for slightly imperfect trajectories
+    NOTE: this can lead to widely diverging trajectories if final endpoint of one line close two other endpoints !
     """
     _, oracle_actions = oracle_policy(policy_step_rng_key, canvas_params, policy_state, env_state, observation)
-    action_noise = jnp.array([0.9, 0.9, 0.]) * canvas_params.quality_max_pos_dif * jax.random.uniform(policy_step_rng_key, shape=(3,))
+    action_noise = jnp.array([0.9, 0.9, 0.]) * canvas_params.quality_max_pos_dif * jax.random.uniform(policy_step_rng_key, shape=(3,), minval=-1, maxval=1)
     return None, oracle_actions + action_noise
 
 def rollout_one_trial(env_rng_key: Key, pol_rng_key: Key, agent_policy: Policy, agent_state_init_fn: AgentStateInitializer, ref_policy: Policy, canvas_params: CanvasParams, ref_forcing: Bool=False):
@@ -263,8 +264,9 @@ def perform_tests(batch_size=32, n_reps=10, save_path = Path('tests/single_rule_
 
     times = []
     for batch in range(n_reps):
-        batch_rng_key = jax.random.key(777+batch)
-        env_key, pol_key = jax.random.split(batch_rng_key)
+        # Should be same env every two reps, but different realizations of the policy
+        env_key = jax.random.key(777+(batch%2))
+        pol_key = jax.random.key(777+batch)
         env_subkeys = jax.random.split(env_key, batch_size)
         pol_subkeys = jax.random.split(pol_key, batch_size)
         tic = time.time()
