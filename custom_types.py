@@ -67,12 +67,12 @@ type StepReward = Float
 @chex.dataclass(frozen=True)
 class CanvasParams:
     # For debugging:
-    num_target_strokes: int = 2
-    max_num_strokes: int = 6
+    # num_target_strokes: int = 2
+    # max_num_strokes: int = 4
 
     # For realsies:
-    # num_target_strokes: int = 4
-    # max_num_strokes: int = 20
+    num_target_strokes: int = 4
+    max_num_strokes: int = 10
 
     size: int = 128
     stroke_min_length: float = 0.1
@@ -108,8 +108,8 @@ class StepOutput(JaxDataclass):
     agent_state: PolicyState
     reference_state: PolicyState
     agent_action: Action
-    reference_action: Optional[Action]
-    obs: Optional[FullCanvas]
+    reference_action: Action
+    obs: FullCanvas
 
 
 class Policy(Protocol):
@@ -117,7 +117,7 @@ class Policy(Protocol):
     Oracle policies also has access to underlying environment state on top of its own state and the observation.
     Agent policies should never use env_state !
     '''
-    def __call__(self, rng_key: Key, policy_state: Optional[PolicyState], env_state: Optional[EnvState], observation: Optional[FullCanvas], canvas_params: CanvasParams) -> Tuple[PolicyState,Action]:
+    def __call__(self, rng_key: Key, policy_state: PolicyState, env_state: EnvState, observation: FullCanvas, canvas_params: CanvasParams) -> Tuple[PolicyState,Action]:
         ...
 
 class PolicyStateInitializer(Protocol):

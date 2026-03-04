@@ -162,12 +162,12 @@ def update_env_state_from_action(rng_key: Key, env_state: EnvState, action: Acti
 
     return env_state
 
-def random_agent_policy(policy_step_rng_key: Key, canvas_params: CanvasParams, agent_state: Optional[PolicyState], env_state: EnvState, observation: Optional[FullCanvas]) -> Tuple[PolicyState, Action]:
+def random_agent_policy(rng_key: Key, canvas_params: CanvasParams, agent_state: PolicyState, env_state: EnvState, observation: FullCanvas) -> Tuple[PolicyState, Action]:
     """
     Here for testing / interface clarification only.
     """
     stroke_max_length = canvas_params.stroke_max_length
-    movement_key, pressure_key = jax.random.split(policy_step_rng_key)
+    movement_key, pressure_key = jax.random.split(rng_key)
     movement = jax.random.uniform(movement_key, shape=(2,), minval=-stroke_max_length, maxval=stroke_max_length, dtype=jnp.float32)
     pressure = jax.random.bernoulli(pressure_key, p=0.5, shape=(1,))
 
@@ -175,7 +175,7 @@ def random_agent_policy(policy_step_rng_key: Key, canvas_params: CanvasParams, a
     new_policy_state = agent_state
     return new_policy_state, jnp.concat((movement, pressure))
 
-def oracle_policy(policy_step_rng_key: Key, policy_state: Optional[PolicyState], env_state: EnvState, observation: Optional[FullCanvas], canvas_params: CanvasParams) -> Tuple[PolicyState, Action]:
+def oracle_policy(rng_key: Key, policy_state: PolicyState, env_state: EnvState, observation: FullCanvas, canvas_params: CanvasParams) -> Tuple[PolicyState, Action]:
     """
     Having access to env_state is cheating, but that's what Oracles are all about
 
@@ -206,13 +206,13 @@ def oracle_policy(policy_step_rng_key: Key, policy_state: Optional[PolicyState],
 
     return None, jnp.concat((movement, jnp.array([pressure])))
 
-def noisy_oracle_policy(policy_step_rng_key: Key, policy_state: Optional[PolicyState], env_state: EnvState, observation: Optional[FullCanvas], canvas_params: CanvasParams) -> Tuple[PolicyState, Action]:
+def noisy_oracle_policy(rng_key: Key, policy_state: PolicyState, env_state: EnvState, observation: FullCanvas, canvas_params: CanvasParams) -> Tuple[PolicyState, Action]:
     """
     Allows for slightly imperfect trajectories
     NOTE: this can lead to widely diverging trajectories if final endpoint of one line close two other endpoints !
     """
-    _, oracle_actions = oracle_policy(policy_step_rng_key, policy_state, env_state, observation, canvas_params)
-    action_noise = jnp.array([0.9, 0.9, 0.]) * canvas_params.quality_max_pos_dif * jax.random.uniform(policy_step_rng_key, shape=(3,), minval=-1, maxval=1)
+    _, oracle_actions = oracle_policy(rng_key, policy_state, env_state, observation, canvas_params)
+    action_noise = jnp.array([0.9, 0.9, 0.]) * canvas_params.quality_max_pos_dif * jax.random.uniform(rng_key, shape=(3,), minval=-1, maxval=1)
     return None, oracle_actions + action_noise
 
 def rollout_trial_batch(
@@ -268,7 +268,6 @@ def rollout_trial_batch(
     initial_ref_states = batched_ref_state_init(init_pol_keys)
     initial_agent_states = batched_agent_state_init(init_pol_keys)
 
-    print(initial_env_states)
     initial_carry = StepCarry(agent_state=initial_agent_states, reference_state=initial_ref_states, env_state=initial_env_states)
 
     # Slightly convoluted, but allows separating rng between the two for "same env, different realizations of stochastic policy"
@@ -285,7 +284,7 @@ def sanity_check():
     save_path.mkdir(exist_ok=True, parents=True)
     logging.critical("Starting test rollouts")
 
-    def dummy_state_init(key: Key) -> PolicyState:
+    def dummy_state_init(rng_key: Key) -> PolicyState:
         return None
 
     B = 64
