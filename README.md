@@ -1,0 +1,1 @@
+All experiments meant to be launched from top-level using `bash run.sh experiments/XX___xxx.py`
