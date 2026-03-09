@@ -10,5 +10,6 @@ wheels/
 .venv
 
 # Misc
-tests
 tb_logs
+__dep__
+results

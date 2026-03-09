@@ -4,3 +4,6 @@ optax
 chex
 pillow
 jaxtyping
+tensorboard # Not strictly necessary inside the docker, but that way can reuse the venv for viewing tensorboard
+tensorboardX
+pytest

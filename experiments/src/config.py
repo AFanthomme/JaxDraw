@@ -23,12 +23,9 @@ class EnvParams:
         self.quality_max_pos_dif=quality_max_pos_dif    
 
     @classmethod
-    def debug_config(cls) -> EnvParams:
+    def debug_config(cls):
         """Returns a version of params optimized for fast debugging."""
         return cls(
             num_target_strokes=2,
             max_num_strokes=5,
         )
-    
-    def __setattr__(self, attr, value):
-        raise AttributeError("Trying to set attribute on a frozen instance")

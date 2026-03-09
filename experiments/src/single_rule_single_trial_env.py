@@ -1,7 +1,8 @@
 import jax
 import jax.numpy as jnp
-from custom_types import *
 from typing import cast
+from .custom_types import *
+import numpy as np
 
 # All "online" functions are private to this submodule and operate on unbatched, unscanned versions of the data 
 
@@ -52,15 +53,15 @@ def _draw_point_single_canvas(coordinate_vector: Coordinate, env_params: EnvPara
     
 def _generate_observation(env_state: EnvState, env_params: EnvParams) -> FullCanvas:
     """
-    Generate the visual observation; internal state update kept separate since more lightweight
-    so could be used in "dreaming" loop without having to generate observations at each step
+    Observation generation should always be deterministic !
+    Therefore, Internal state update kept separate 
     """
     target_canvas = _draw_strokes_single_canvas(env_state.target_strokes, env_params)
     draw_canvas = _draw_strokes_single_canvas(env_state.drawn_strokes, env_params)
     pos_canvas = _draw_point_single_canvas(env_state.position, env_params)
     return jnp.stack((pos_canvas, draw_canvas, target_canvas), axis=0)
 
-def _update_stroke_status(env_state: EnvState, env_params: EnvParams) -> EnvState:
+def _update_strokes_statuses(env_state: EnvState, env_params: EnvParams) -> Tuple[EnvState, Reward]:
     """
     For now, compute this based solely on start-end; could probably compute the dice implicitly 
     (would be better once we use more complex shapes or do more granular movement) but 
@@ -104,11 +105,10 @@ def _update_stroke_status(env_state: EnvState, env_params: EnvParams) -> EnvStat
     # Update the line status
     new_status = current_matches | old_status
     env_state = env_state.replace(target_strokes_status=new_status)
-    env_state = env_state.replace(step_reward=step_reward)
 
-    return env_state
+    return env_state, step_reward
 
-def _update_env_state_from_action(rng_key: Key, env_state: EnvState, action: Action, env_params: EnvParams) -> EnvState:
+def _update_env_state_from_action(rng_key: Key, env_state: EnvState, action: Action, env_params: EnvParams) -> Tuple[EnvState, Reward]:
     """
     NOTE: action expected in [-1, 1]^3; first 2 movement, third will be compared to 0 to determine if actually drawing
     Environment update could, in theory, be non-deterministic so introduce support here
@@ -123,10 +123,10 @@ def _update_env_state_from_action(rng_key: Key, env_state: EnvState, action: Act
     env_state = env_state.replace(drawn_strokes=new_drawn_strokes)
     env_state = env_state.replace(position=new_position)
 
-    env_state = _update_stroke_status(env_state, env_params)
+    env_state, reward = _update_strokes_statuses(env_state, env_params)
     env_state = env_state.replace(trial_step=env_state.trial_step + 1)
 
-    return env_state
+    return env_state, reward
 
 def _initialize_env_state(env_init_key: Key, env_params: EnvParams) -> EnvState:
     """
@@ -150,66 +150,78 @@ def _initialize_env_state(env_init_key: Key, env_params: EnvParams) -> EnvState:
 
     start_pos = jax.random.uniform(start_pos_key, shape=(2,), minval=2*stroke_thickness, maxval=1.-2*stroke_thickness, dtype=jnp.float32)
     trial_step: TrialStep = jnp.array(0)
-    step_reward: StepReward = jnp.array(0.)
 
-    state = EnvState(target_strokes=target_strokes, drawn_strokes=drawn_strokes, position=start_pos, target_strokes_status=target_strokes_status, step_reward=step_reward, trial_step=trial_step)
+    state = EnvState(target_strokes=target_strokes, drawn_strokes=drawn_strokes, position=start_pos, target_strokes_status=target_strokes_status, trial_step=trial_step)
 
     return state
 
-def batched_generate_obs(env_state: BatchedEnvState, env_params: EnvParams) -> BatchedCanvas:
+def batched_generate_obs(env_state: EnvStateBatch, env_params: EnvParams) -> CanvasBatch:
+    """Observation generation should always be deterministic !"""
     def _unwrapped_logic(s):
         # Convert whatever JAX sliced into the explicit EnvState type; by default, it gives same type as input
         return _generate_observation(EnvState(**s.__dict__), env_params)
-    return jax.vmap(_unwrapped_logic, in_axes=(0, None))(env_state)
+    return jax.vmap(_unwrapped_logic, in_axes=(0,))(env_state)
 
-def offline_regenerate_observations_history(env_state: HistoryEnvState, env_params: EnvParams) -> HistoryCanvas:
+def offline_regenerate_observations_history(env_state: EnvStateHistory, env_params: EnvParams) -> CanvasHistory:
+    """
+    Observation generation should always be deterministic !
+    NOTE: here we use a vamp also for time since env has already been replayed so no sequential dependency
+    """
     def _unwrapped_logic(s):
-        # Convert whatever JAX sliced into the explicit BatchedEnvState type; by default, it gives same type as input
-        return batched_generate_obs(BatchedEnvState(**s.__dict__), env_params)
-    return jax.vmap(_unwrapped_logic, in_axes=(0, None))(env_state)
+        # Convert whatever JAX sliced into the explicit EnvStateBatch type; by default, it gives same type as input
+        return batched_generate_obs(EnvStateBatch(**s.__dict__), env_params)
+    return jax.vmap(_unwrapped_logic, in_axes=0)(env_state)
 
-def batched_initialize_env_states(rng_keys: Key[Array, "B"], env_params: EnvParams) -> BatchedEnvState:
+
+def batched_initialize_env_states(rng_keys: Key[Array, "B"], env_params: EnvParams) -> EnvStateBatch:
     def _unwrapped_logic(key, env_params):
         return _initialize_env_state(key, env_params)
-    f = jax.vmap(_unwrapped_logic, in_axes=(0, 0, 0, None))
-    return cast(BatchedEnvState, f(rng_keys, env_params))
+    f = jax.vmap(_unwrapped_logic, in_axes=(0, None))
+    # return cast(EnvStateBatch, f(rng_keys, env_params))
+    tmp = f(rng_keys, env_params)
+    return EnvStateBatch(**tmp.__dict__)
 
-def batched_update_states(rng_keys: Key[Array, "B"], env_states: BatchedEnvState, actions: BatchedAction, env_params: EnvParams) -> BatchedEnvState:
+def batched_update_states(rng_keys: Key[Array, "B"], env_states: EnvStateBatch, actions: ActionBatch, env_params: EnvParams) -> Tuple[EnvStateBatch, RewardBatch]:
     def _unwrapped_logic(key, state, action, env_params):
         # Conversion logic needed only for composite type
-        return _update_env_state_from_action(key, EnvState(**state.__dict__), action, env_params)
-    tmp = jax.vmap(_unwrapped_logic, in_axes=(0, 0, 0, None))(rng_keys, env_states, actions, env_params)
-    return BatchedEnvState(**tmp.__dict__)
+        state, reward = _update_env_state_from_action(key, EnvState(**state.__dict__), action, env_params)
+        return EnvStateBatch(**state.__dict__), cast(RewardBatch, reward)
+    state_batch, reward_batch = jax.vmap(_unwrapped_logic, in_axes=(0, 0, 0, None))(rng_keys, env_states, actions, env_params)
+    return state_batch, reward_batch
 
 def wrap_policy_for_batch(policy: Policy) -> BatchedPolicy:
     def _unwrapped_logic(rng_key, policy_state, env_state, observation, env_params):
         return policy(rng_key, policy_state, EnvState(**env_state.__dict__), observation, env_params)
     
     f = jax.vmap(_unwrapped_logic, in_axes=(0, 0, 0, None, None))
-    def casted_f(rng_key: Key[Array, "B"], policy_state: BatchedPolicyState, env_state: BatchedEnvState, observation: BatchedCanvas, env_params: EnvParams):
+    def casted_f(rng_key: Key[Array, "B"], policy_state: PolicyStateBatch, env_state: EnvStateBatch, observation: CanvasBatch, env_params: EnvParams):
         state, action = f(rng_key, policy_state, EnvState(**env_state.__dict__), observation, env_params)
-        return cast(BatchedPolicyState, state), cast(BatchedAction, action)
+        return cast(PolicyStateBatch, state), cast(ActionBatch, action)
     return casted_f
 
-def wrap_pol_init_for_batch(init_fn: PolicyStateInitializer) -> BatchedPolicyStateInitializer:
+def wrap_pol_init_for_batch(init_fn: PolicyStateInitializer) -> PolicyStateBatchInitializer:
     def _unwrapped_logic(rng_key):
         return init_fn(rng_key)
     
     f = jax.vmap(_unwrapped_logic, in_axes=(0,))
-    def casted_f(rng_keys: Key[Array, "B"]) -> BatchedPolicyState:
-        return cast(BatchedPolicyState, f(rng_keys))
+    def casted_f(rng_keys: Key[Array, "B"]) -> PolicyStateBatch:
+        return cast(PolicyStateBatch, f(rng_keys))
     return casted_f
 
-def online_rollout_trial_batch(
+def off_policy_online_rollout(
                         # Traced
                         env_rng_key: Key, pol_rng_key: Key,   
-                        # Can be traced, can be static; assume both always present,
-                        # If necessary, put agent policy in there twice, jit should take care of it 
+                        # Can be traced, can be static
                         agent_policy: Policy, agent_state_init_fn: PolicyStateInitializer, 
                         teacher_policy: Policy, teacher_state_init_fn: PolicyStateInitializer, 
                         # Static
                         batch_size: int, env_params: EnvParams,
-                        ):
+                        ) -> FullRollout:
+    """
+    Both agent and teacher policies are executed, actions and states tracked.
+    Only teacher actually changes environment. If no need for teacher, use online_policy_rollout
+    (an alias that uses same policy for both but returns same objects for simplicity)
+    """
     T = env_params.max_num_strokes
     B = batch_size
 
@@ -237,18 +249,65 @@ def online_rollout_trial_batch(
 
     def grouped_batch_step(carry: BatchedStepCarry, step_keys: Key[Array, "B 2"]):
         env_step_keys, pol_step_keys = jnp.unstack(step_keys, axis=-1)
-        batch_env_states = carry.env_state
-        batch_agent_states = carry.agent_state
-        batch_teacher_states = carry.teacher_state
-        batch_obs: Float[Array, "B 3 H W"] = batched_generate_obs(batch_env_states, env_params)
-        batch_agent_states, batch_agent_actions = batched_agent_policy(pol_step_keys, batch_agent_states, batch_env_states, batch_obs, env_params)
-        batch_teacher_states, batch_teacher_actions = batched_teacher_policy(pol_step_keys, batch_teacher_states, batch_env_states, batch_obs, env_params)
+        old_env_states = carry.env_state
+        old_agent_states = carry.agent_state
+        old_teacher_states = carry.teacher_state
+        old_obs: Float[Array, "B 3 H W"] = batched_generate_obs(old_env_states, env_params)
+        new_agent_states, agent_actions = batched_agent_policy(pol_step_keys, old_agent_states, old_env_states, old_obs, env_params)
+        new_teacher_states, teacher_actions = batched_teacher_policy(pol_step_keys, old_teacher_states, old_env_states, old_obs, env_params)
         
-        batch_new_env_states = batched_update_states(env_step_keys, batch_env_states, batch_teacher_actions, env_params)
-        new_carry = carry.replace(agent_state=batch_agent_states, teacher_state=batch_teacher_states, env_state=batch_new_env_states)
-        output = BatchedStepOutput(env_state=batch_new_env_states, agent_state=batch_agent_states, teacher_state=batch_teacher_states, 
-                                   agent_action=batch_agent_actions, teacher_action=batch_teacher_actions, obs=batch_obs)
+        new_env_states, rewards = batched_update_states(env_step_keys, old_env_states, teacher_actions, env_params)
+
+        # Output uses pre-update states and obs to align correctly with actions / rewards
+        output = RolloutStepOutput(
+            env_state=old_env_states, 
+            obs=old_obs, 
+            agent_state=old_agent_states, 
+            teacher_state=old_teacher_states, 
+            agent_action=agent_actions, 
+            teacher_action=teacher_actions, 
+            reward=rewards)
+        
+        # Carry on the other hand needs the updated states !
+        new_carry = carry.replace(agent_state=new_agent_states, teacher_state=new_teacher_states, env_state=new_env_states)
+        
         return new_carry, output
 
     _, output_history = jax.lax.scan(grouped_batch_step, initial_carry, all_steps_keys)
-    return output_history
+    return cast(FullRollout, output_history)
+
+
+def on_policy_online_rollout(
+                        # Traced
+                        env_rng_key: Key, pol_rng_key: Key,   
+                        # Can be traced, can be static
+                        policy: Policy, state_init_fn: PolicyStateInitializer, 
+                        # Static
+                        batch_size: int, env_params: EnvParams,
+                        ) -> FullRollout:
+    '''
+    No teacher policy implemented as wrapper to teacher policy to avoid duplicated code
+    At compilation time, this will get optimized so no double copies / computations should happen
+    '''
+    return off_policy_online_rollout(env_rng_key, pol_rng_key, policy, state_init_fn, policy, state_init_fn, batch_size, env_params)
+
+def offline_replay_actions(env_rng_key: Key[Array, ""], actions: ActionHistory, env_params: EnvParams) -> Tuple[EnvStateHistory, RewardHistory]:
+    T = env_params.max_num_strokes
+    B = actions.shape[1]
+
+    init_env_key, rollout_env_key = jax.random.split(env_rng_key, 2)
+    initial_env_states = batched_initialize_env_states(jax.random.split(init_env_key, B), env_params)
+    all_steps_env_keys = jax.random.split(rollout_env_key, T*B).reshape(T, B)
+    step_inputs = {"keys": all_steps_env_keys, "actions": actions}
+
+    def step(env_state: EnvStateBatch, step_input: dict[str, Array]):
+        step_keys = step_input["keys"]
+        step_actions = step_input["actions"]
+        new_env_state, rewards = batched_update_states(step_keys, env_state, step_actions, env_params)
+        step_outputs = {"env_state": env_state, "reward": rewards}
+        return new_env_state, step_outputs
+
+    _, output_history = jax.lax.scan(step, initial_env_states, step_inputs)
+    env_state_history = cast(EnvStateHistory, output_history["env_state"])
+    reward_history = cast(RewardHistory, output_history["reward"])
+    return env_state_history, reward_history

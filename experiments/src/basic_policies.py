@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from custom_types import *
+from .custom_types import *
 
 def random_agent_policy(rng_key: Key, agent_state: PolicyState, env_state: EnvState, observation: FullCanvas, env_params: EnvParams) -> Tuple[PolicyState, Action]:
     """
