@@ -47,6 +47,7 @@ def save_gif(savepath, images, agent_actions, teacher_actions, teacher_rewards, 
     
     anim = FuncAnimation(fig, update_frame, frames=T, blit=True)
     anim.save(savepath, writer=PillowWriter(fps=1))
+    plt.close()
 
 
 def sanity_check(agent_policy_name: str="noisy_oracle_policy", teacher_policy_name: Optional[str]=None):
