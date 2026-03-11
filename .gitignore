@@ -1,15 +1,40 @@
-# Python-generated files
+# IDEs
+.vscode/
+.idea/
+
+# Compiled bytecode
 __pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+*.py[cod]
+*$py.class
 
-# Virtual environments
-.venv
+# Local virtual environments
+.venv/
+venv/
+env/
+.env
 
-# Misc
-tb_logs
-__dep__
-results
+# Pytest caches
+.pytest_cache/
+.coverage
+
+# Project-specific output directories
+results/
+tb_logs/
+logs/
+
+# Visual outputs (recursively ignore these anywhere)
+*.mp4
+*.gif
+*.png
+*.jpg
+
+# Model weights and checkpoints
+*.ckpt
+*.safetensors
+*.h5
+*.pb
+*.pt
+*.pth
+
+# For illustration purposes
+!illustrations/*

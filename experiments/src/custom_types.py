@@ -4,7 +4,7 @@ Tons of boilerplate, but this makes nice usable tooltips in pylance so probably 
 Try to only give types to things that might end up in a carried / returned pytree, not internals
 '''
 import chex 
-from typing import Tuple, Protocol, TypeVar,dataclass_transform,Generic
+from typing import Tuple, Protocol, TypeVar,dataclass_transform,Generic,Optional
 from jaxtyping import Float, Array, Key, Bool, Int
 from .config import EnvParams
 
@@ -142,11 +142,11 @@ Float[Array, "T B 3"], Value range [-1, 1], movement_vector and pressure concate
 IMPORTANT : drawing happens if Action[2] > 0, not 0.5, so tanh not sigmoid
 """
 
-T = TypeVar("T")
+Ty = TypeVar("Ty")
 
 @dataclass_transform()
-class JaxDataclass(Generic[T]):
-    def replace(self, **kwargs) -> T:
+class JaxDataclass(Generic[Ty]):
+    def replace(self, **kwargs) -> Ty:
         # Chex handles this at runtime
         ...
 

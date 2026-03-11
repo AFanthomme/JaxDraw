@@ -1,0 +1,1 @@
+docker run --rm --gpus all --mount type=bind,src=./results,dst=/app/results -it afanthomme/jax-draw:gpu-latest "$@" 
