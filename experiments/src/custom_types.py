@@ -142,6 +142,8 @@ Float[Array, "T B 3"], Value range [-1, 1], movement_vector and pressure concate
 IMPORTANT : drawing happens if Action[2] > 0, not 0.5, so tanh not sigmoid
 """
 
+type KeyBatch = Key[Array, "B"]
+
 Ty = TypeVar("Ty")
 
 @dataclass_transform()
@@ -231,7 +233,8 @@ class RolloutStepOutput(JaxDataclass):
     teacher_state: PolicyStateBatch\n
     agent_action: ActionBatch\n
     teacher_action: ActionBatch\n
-    reward: Rewardbatch
+    agent_reward: RewardBatch
+    teacher_reward: RewardBatch
     '''
     env_state: EnvStateBatch
     obs: CanvasBatch
@@ -239,7 +242,8 @@ class RolloutStepOutput(JaxDataclass):
     teacher_state: PolicyStateBatch
     agent_action: ActionBatch
     teacher_action: ActionBatch
-    reward: RewardBatch
+    agent_reward: RewardBatch
+    teacher_reward: RewardBatch
 
 
 @chex.dataclass(frozen=True)
@@ -253,7 +257,8 @@ class FullRollout(JaxDataclass):
     teacher_state: PolicyStateHistory\n
     agent_action: ActionHistory\n
     teacher_action: ActionHistory\n
-    reward: RewardHistory
+    agent_reward: RewardHistory
+    teacher_reward: RewardHistory
     '''
     env_state: EnvStateHistory
     obs: CanvasHistory
@@ -261,8 +266,8 @@ class FullRollout(JaxDataclass):
     teacher_state: PolicyStateHistory
     agent_action: ActionHistory
     teacher_action: ActionHistory
-    reward: RewardHistory
-
+    agent_reward: RewardHistory
+    teacher_reward: RewardHistory
 
 class Policy(Protocol):
     '''

@@ -59,70 +59,67 @@ def _generate_observation(env_state: EnvState, env_params: EnvParams) -> FullCan
     pos_canvas = _draw_point_single_canvas(env_state.position, env_params)
     return jnp.stack((pos_canvas, draw_canvas, target_canvas), axis=0)
 
-def _update_strokes_statuses(env_state: EnvState, env_params: EnvParams) -> Tuple[EnvState, Reward]:
+def _is_valid_match(test_stroke: Stroke, target_stroke: Stroke, env_params: EnvParams):
     """
-    For now, compute this based solely on start-end; could probably compute the dice implicitly 
-    (would be better once we use more complex shapes or do more granular movement) but 
-    would require individual frames in obs making it significantly more computationally expensive.
-
-    NOTE: Strokes are expected to already be in lexicographic order, but not used to avoid brittle edges
+    Checks if test_stroke matches ref_stroke based on endpoint proximity
+    Tests all pairings of endpoints in parallel, and ensures not both test endpoints are close to the same target
     """
-    latest_stroke = env_state.drawn_strokes[env_state.trial_step]
+    threshold = env_params.quality_max_pos_dif
 
-    def is_valid_match(test_stroke: Stroke, target_stroke: Stroke):
-        """
-        Checks if test_stroke matches ref_stroke based on endpoint proximity
-        Tests all pairings of endpoints in parallel, and ensures not both test endpoints are close to the same target
-        """
-        threshold = env_params.quality_max_pos_dif
-
-        # Compute all 4 pairwise squared distances via broadcasting
-        t_pts = test_stroke.reshape(2, 2)
-        r_pts = target_stroke.reshape(2, 2)
-        diffs = t_pts[:, None, :] - r_pts[None, :, :]
-        # Use L_infty distance for easier noise manipulation
-        dist = jnp.max(jnp.abs(diffs), axis=-1)
-        
-        # Check that each test endpoint is within threshold of SOME ref endpoint
-        min_dists_sq = jnp.min(dist, axis=1)
-        within_threshold = jnp.all(min_dists_sq < threshold)
-        
-        # Check that both test endpoints are not closest to the same ref endpoint
-        l2_dist = jnp.sum((diffs**2), axis=-1)
-        closest_ref_indices = jnp.argmin(l2_dist, axis=1)
-        distinct_endpoints = closest_ref_indices[0] != closest_ref_indices[1]
-        
-        return within_threshold & distinct_endpoints
+    # Compute all 4 pairwise squared distances via broadcasting
+    t_pts = test_stroke.reshape(2, 2)
+    r_pts = target_stroke.reshape(2, 2)
+    diffs = t_pts[:, None, :] - r_pts[None, :, :]
+    # Use L_infty distance for easier noise manipulation
+    dist = jnp.max(jnp.abs(diffs), axis=-1)
     
-    current_matches = jax.vmap(is_valid_match, in_axes=(None, 0))(latest_stroke, env_state.target_strokes)
+    # Check that each test endpoint is within threshold of SOME ref endpoint
+    min_dists_sq = jnp.min(dist, axis=1)
+    within_threshold = jnp.all(min_dists_sq < threshold)
+    
+    # Check that both test endpoints are not closest to the same ref endpoint
+    l2_dist = jnp.sum((diffs**2), axis=-1)
+    closest_ref_indices = jnp.argmin(l2_dist, axis=1)
+    distinct_endpoints = closest_ref_indices[0] != closest_ref_indices[1]
+    
+    return within_threshold & distinct_endpoints
+
+def _compute_new_stroke_statuses(latest_stroke, env_state: EnvState, env_params: EnvParams) -> TargetStrokesStatus:   
+    current_matches = jax.vmap(_is_valid_match, in_axes=(None, 0, None))(latest_stroke, env_state.target_strokes, env_params)
     old_status = env_state.target_strokes_status
-
-    # Get a reward only if the match is really new
-    step_reward = jnp.any(current_matches & (~old_status)).astype(jnp.float32)
-
-    # Update the line status
     new_status = current_matches | old_status
-    env_state = env_state.replace(target_strokes_status=new_status)
+    return new_status
 
-    return env_state, step_reward
-
-def _update_env_state_from_action(rng_key: Key, env_state: EnvState, action: Action, env_params: EnvParams) -> Tuple[EnvState, Reward]:
-    """
-    NOTE: action expected in [-1, 1]^3; first 2 movement, third will be compared to 0 to determine if actually drawing
-    Environment update could, in theory, be non-deterministic so introduce support here
-    """
-    old_position = env_state.position
+def _compute_stroke_and_pos_from_action(env_state: EnvState, old_position: Coordinate, action: Action, env_params: EnvParams) -> Tuple[Stroke, Coordinate]:
     new_position = jnp.clip(env_state.position + action[:2], env_params.thickness, 1.-env_params.thickness) 
     proposed_line = jnp.concat((old_position, new_position), axis=-1)
     default_drawn_line_state: Float[Array, "4"] = -10*jnp.ones(4, dtype=jnp.float32)
     pen_is_down = action[2] > 0.
     new_line_state = (1-pen_is_down) * default_drawn_line_state + pen_is_down * proposed_line
-    new_drawn_strokes = env_state.drawn_strokes.at[env_state.trial_step].set(_canonicalize_strokes(new_line_state))
+    return _canonicalize_strokes(new_line_state), new_position
+
+def _compute_reward_from_action(action: Action, env_state: EnvState, env_params: EnvParams) -> Reward:   
+    old_position = env_state.position
+    old_status = env_state.target_strokes_status
+    new_stroke, _ = _compute_stroke_and_pos_from_action(env_state, old_position, action, env_params)
+    new_status = _compute_new_stroke_statuses(new_stroke, env_state, env_params)
+    reward = jnp.any(new_status & (~old_status)).astype(jnp.float32)
+    return reward
+
+def _update_env_state_from_action(rng_key: Key, env_state: EnvState, action: Action, env_params: EnvParams) -> EnvState:
+    """
+    NOTE: action expected in [-1, 1]^3; first 2 movement, third will be compared to 0 to determine if actually drawing
+    Environment update could, in theory, be non-deterministic so introduce support here
+    """
+    old_position = env_state.position
+    latest_stroke, new_position = _compute_stroke_and_pos_from_action(env_state, old_position, action, env_params)
+    new_target_stroke_statuses = _compute_new_stroke_statuses(latest_stroke, env_state, env_params)
+    new_drawn_strokes = env_state.drawn_strokes.at[env_state.trial_step].set(latest_stroke)
     env_state = env_state.replace(drawn_strokes=new_drawn_strokes)
     env_state = env_state.replace(position=new_position)
-    env_state, reward = _update_strokes_statuses(env_state, env_params)
+    env_state = env_state.replace(target_strokes_status=new_target_stroke_statuses)
     env_state = env_state.replace(trial_step=env_state.trial_step + 1)
-    return env_state, reward
+    return env_state
 
 def _initialize_env_state(env_init_key: Key, env_params: EnvParams) -> EnvState:
     """
@@ -160,35 +157,41 @@ def offline_regenerate_observations_history(env_state: EnvStateHistory, env_para
         return batched_generate_obs(EnvStateBatch(**s.__dict__), env_params)
     return jax.vmap(_unwrapped_logic, in_axes=0)(env_state)
 
-
-def batched_initialize_env_states(rng_keys: Key[Array, "B"], env_params: EnvParams) -> EnvStateBatch:
+def _batched_initialize_env_states(rng_keys: KeyBatch, env_params: EnvParams) -> EnvStateBatch:
     def _unwrapped_logic(key, env_params):
         return _initialize_env_state(key, env_params)
     f = jax.vmap(_unwrapped_logic, in_axes=(0, None))
     tmp = f(rng_keys, env_params)
     return EnvStateBatch(**tmp.__dict__)
 
-def batched_update_states(rng_keys: Key[Array, "B"], env_states: EnvStateBatch, actions: ActionBatch, env_params: EnvParams) -> Tuple[EnvStateBatch, RewardBatch]:
+def _batched_update_states(rng_keys: KeyBatch, env_states: EnvStateBatch, actions: ActionBatch, env_params: EnvParams) -> EnvStateBatch:
     def _unwrapped_logic(key, state, action, env_params):
-        state, reward = _update_env_state_from_action(key, EnvState(**state.__dict__), action, env_params)
-        return EnvStateBatch(**state.__dict__), cast(RewardBatch, reward)
-    state_batch, reward_batch = jax.vmap(_unwrapped_logic, in_axes=(0, 0, 0, None))(rng_keys, env_states, actions, env_params)
-    return state_batch, reward_batch
+        state = _update_env_state_from_action(key, EnvState(**state.__dict__), action, env_params)
+        return EnvStateBatch(**state.__dict__)
+    state_batch = jax.vmap(_unwrapped_logic, in_axes=(0, 0, 0, None))(rng_keys, env_states, actions, env_params)
+    return state_batch
 
-def wrap_policy_for_batch(policy: Policy) -> BatchedPolicy:
+def _batched_compute_reward_from_action(actions: ActionBatch, env_states: EnvStateBatch, env_params: EnvParams) -> RewardBatch:
+    def _unwrapped_logic(action, state, env_params):
+        reward = _compute_reward_from_action(cast(Action, action), EnvState(**state.__dict__), env_params)
+        return cast(RewardBatch, reward)
+    reward_batch = jax.vmap(_unwrapped_logic, in_axes=(0, 0, None))(actions, env_states, env_params)
+    return reward_batch
+
+def _wrap_policy_for_batch(policy: Policy) -> BatchedPolicy:
     def _unwrapped_logic(rng_key, policy_state, env_state, observation, env_params):
         return policy(rng_key, policy_state, EnvState(**env_state.__dict__), observation, env_params)
     f = jax.vmap(_unwrapped_logic, in_axes=(0, 0, 0, None, None))
-    def casted_f(rng_key: Key[Array, "B"], policy_state: PolicyStateBatch, env_state: EnvStateBatch, observation: CanvasBatch, env_params: EnvParams):
+    def casted_f(rng_key: KeyBatch, policy_state: PolicyStateBatch, env_state: EnvStateBatch, observation: CanvasBatch, env_params: EnvParams):
         state, action = f(rng_key, policy_state, EnvState(**env_state.__dict__), observation, env_params)
         return cast(PolicyStateBatch, state), cast(ActionBatch, action)
     return casted_f
 
-def wrap_pol_init_for_batch(init_fn: PolicyStateInitializer) -> PolicyStateBatchInitializer:
+def _wrap_pol_init_for_batch(init_fn: PolicyStateInitializer) -> PolicyStateBatchInitializer:
     def _unwrapped_logic(rng_key):
         return init_fn(rng_key)
     f = jax.vmap(_unwrapped_logic, in_axes=(0,))
-    def casted_f(rng_keys: Key[Array, "B"]) -> PolicyStateBatch:
+    def casted_f(rng_keys: KeyBatch) -> PolicyStateBatch:
         return cast(PolicyStateBatch, f(rng_keys))
     return casted_f
 
@@ -212,14 +215,14 @@ def off_policy_online_rollout(
     T = env_params.max_num_strokes
     B = batch_size
 
-    batched_agent_state_init = wrap_pol_init_for_batch(agent_state_init_fn)
-    batched_agent_policy = wrap_policy_for_batch(agent_policy)
+    batched_agent_state_init = _wrap_pol_init_for_batch(agent_state_init_fn)
+    batched_agent_policy = _wrap_policy_for_batch(agent_policy)
 
-    batched_teacher_state_init = wrap_pol_init_for_batch(teacher_state_init_fn)
-    batched_teacher_policy = wrap_policy_for_batch(teacher_policy)
+    batched_teacher_state_init = _wrap_pol_init_for_batch(teacher_state_init_fn)
+    batched_teacher_policy = _wrap_policy_for_batch(teacher_policy)
 
     init_env_key, rollout_env_key = jax.random.split(env_rng_key, 2)
-    initial_env_states = batched_initialize_env_states(jax.random.split(init_env_key, B), env_params)
+    initial_env_states = _batched_initialize_env_states(jax.random.split(init_env_key, B), env_params)
 
     init_pol_key, rollout_pol_key = jax.random.split(pol_rng_key, 2)
     init_pol_keys = jax.random.split(init_pol_key, B)
@@ -242,7 +245,11 @@ def off_policy_online_rollout(
         new_agent_states, agent_actions = batched_agent_policy(pol_step_keys, old_agent_states, old_env_states, old_obs, env_params)
         new_teacher_states, teacher_actions = batched_teacher_policy(pol_step_keys, old_teacher_states, old_env_states, old_obs, env_params)
         
-        new_env_states, rewards = batched_update_states(env_step_keys, old_env_states, teacher_actions, env_params)
+        agent_rewards = _batched_compute_reward_from_action(agent_actions, old_env_states, env_params)
+        teacher_rewards = _batched_compute_reward_from_action(teacher_actions, old_env_states, env_params)
+
+        # Only update using the teacher action
+        new_env_states = _batched_update_states(env_step_keys, old_env_states, teacher_actions, env_params)
 
         # Output uses pre-update states and obs to align correctly with actions / rewards
         output = RolloutStepOutput(
@@ -252,7 +259,9 @@ def off_policy_online_rollout(
             teacher_state=old_teacher_states, 
             agent_action=agent_actions, 
             teacher_action=teacher_actions, 
-            reward=rewards)
+            agent_reward=agent_rewards, 
+            teacher_reward=teacher_rewards, 
+            )
         
         # Carry on the other hand needs the updated states !
         new_carry = carry.replace(agent_state=new_agent_states, teacher_state=new_teacher_states, env_state=new_env_states)
@@ -283,14 +292,15 @@ def offline_replay_actions(env_rng_key: Key[Array, ""], actions: ActionHistory, 
     B = actions.shape[1]
 
     init_env_key, rollout_env_key = jax.random.split(env_rng_key, 2)
-    initial_env_states = batched_initialize_env_states(jax.random.split(init_env_key, B), env_params)
+    initial_env_states = _batched_initialize_env_states(jax.random.split(init_env_key, B), env_params)
     all_steps_env_keys = jax.random.split(rollout_env_key, T*B).reshape(T, B)
     step_inputs = {"keys": all_steps_env_keys, "actions": actions}
 
     def step(env_state: EnvStateBatch, step_input: dict[str, Array]):
         step_keys = step_input["keys"]
         step_actions = step_input["actions"]
-        new_env_state, rewards = batched_update_states(step_keys, env_state, step_actions, env_params)
+        new_env_state = _batched_update_states(step_keys, env_state, step_actions, env_params)
+        rewards = _batched_compute_reward_from_action(step_actions, env_state, env_params)
         step_outputs = {"env_state": env_state, "reward": rewards}
         return new_env_state, step_outputs
 
