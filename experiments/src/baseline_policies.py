@@ -3,7 +3,6 @@ import jax.numpy as jnp
 from .custom_types import *
 
 
-
 def random_agent_policy(rng_key: Key, agent_state: PolicyState, env_state: EnvState, observation: FullCanvas, env_params: EnvParams) -> Tuple[PolicyState, Action]:
     """
     Here for testing / interface clarification only.
@@ -65,8 +64,22 @@ def noisy_oracle_policy(rng_key: Key, policy_state: PolicyState, env_state: EnvS
     action_noise = jnp.array([0.9, 0.9, 0.]) * env_params.quality_max_pos_dif * jax.random.uniform(rng_key, shape=(3,), minval=-1, maxval=1)
     return policy_state, oracle_actions + action_noise
 
+def make_custom_noise_level_policy(noise_level):
+    def f(rng_key: Key, policy_state: PolicyState, env_state: EnvState, observation: FullCanvas, env_params: EnvParams) -> Tuple[PolicyState, Action]:
+        """
+        Allows for slightly imperfect trajectories
+        NOTE: this can lead to widely diverging trajectories if final endpoint of one line close two other endpoints !
+        """
+        _, oracle_actions = oracle_policy(rng_key, policy_state, env_state, observation, env_params)
+        action_noise = jnp.array([noise_level, noise_level, 0.]) * jax.random.uniform(rng_key, shape=(3,), minval=-1, maxval=1)
+        return policy_state, oracle_actions + action_noise 
+    return f
+
 baseline_policy_register = {
-         "random_agent_policy": random_agent_policy,
-         "oracle_policy": oracle_policy,
-         "noisy_oracle_policy": noisy_oracle_policy,
+         "random": random_agent_policy,
+         "oracle": oracle_policy,
+         "noisy_oracle": noisy_oracle_policy,
+         "noisy_oracle_003": make_custom_noise_level_policy(0.03), 
+         "noisy_oracle_004": make_custom_noise_level_policy(0.04), 
+         "noisy_oracle_006": make_custom_noise_level_policy(0.06), 
 }

@@ -9,7 +9,7 @@ import jax
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
-
+from experiments.src.utils import RunningStats
 
 def save_gif(savepath, images, agent_actions, teacher_actions, teacher_rewards, agent_rewards, positions, title=''):  
     T, H, W, _ = images.shape 
@@ -107,14 +107,92 @@ def sanity_check(agent_policy_name: str="noisy_oracle_policy", teacher_policy_na
         savepath = base_savepath / f'traj_{b}.gif'
         save_gif(savepath, obs[b], agent_actions[b], teacher_actions[b], agent_rewards[b], teacher_rewards[b], positions[b], title=title)
 
+
+
 def cumulated_rewards_baselines():
-    ...
+    B = 128
+    # n_batches = 1024
+    n_batches = 128
+
+    env_params = EnvParams()
+    T=env_params.max_num_strokes
+    R_max = env_params.num_target_strokes
+    def dummy_state_init(rng_key: Key) -> PolicyState:
+        return jnp.zeros(1)
+    
+    colors = {
+            'random': 'r',
+            'oracle': 'darkgreen',
+            'noisy_oracle_003': 'olive',
+            'noisy_oracle_004': 'teal',
+            'noisy_oracle_006': 'orange'
+            }
+    
+    data = {}
+    for pol_name in colors.keys():
+        policy = baseline_policy_register[pol_name]
+        logging.critical(f"Starting test rollouts for agent_policy {pol_name}")
+        running_stats = RunningStats(shape=(T))
+
+        # Need to recompile after every policy change if we want both speedup and actual change
+
+        online_rollout_fn = jax.jit(on_policy_online_rollout, static_argnums=(2, 3, 4, 5))
+        for b in range(n_batches):
+            env_key = jax.random.key(777+b)
+            pol_key = jax.random.key(777+b)
+            batch_rollout = online_rollout_fn(# Traced
+                                    env_key, pol_key, 
+                                    # Static
+                                    policy, dummy_state_init, 
+                                    B, env_params)
+            
+            batch_rewards: Float["Array", "T B"] = batch_rollout.agent_reward
+
+            # Quick sanity check that we don't get panalty at the same time as reward
+            pos_reward = np.asarray(batch_rewards) > 0.
+            integer_reward = np.isin(np.asarray(batch_rewards),  [0, 1, 2, 3, 4])
+
+            if np.any(pos_reward * ~integer_reward):
+                logging.critical(f'Found rewards that is neither integer nor negative: {batch_rewards[pos_reward * ~integer_reward]}')
+
+            cumulated_rewards = jnp.cumsum(batch_rewards, axis=0).T
+            running_stats.update(np.asarray(cumulated_rewards))
+
+
+        data[pol_name] = {'mean': np.asarray(running_stats.mean), 'std': np.sqrt(np.asarray(running_stats.var)), 
+                          'min': np.asarray(running_stats.min), 'max': np.asarray(running_stats.max)}
+
+    fig, ax = plt.subplots()
+    fig.suptitle('Cumulative reward across time for baseline policies')
+    fig.subplots_adjust(right=0.6)
+    ax.set_xlabel('Time in trial')
+    ax.set_ylabel('Cumulated reward')
+    for i in range(1,5):
+        plt.axhline(i, ls=':', c="gray", alpha=.3)
+    
+
+    for pol_name, policy_arrays in data.items():
+        mean = policy_arrays['mean'] 
+        y_min = policy_arrays['min'] 
+        y_max = policy_arrays['max'] 
+        std = policy_arrays['std'] 
+        # Don't show std going lower than the min (useful if only upwards variance like in oracle)
+        y_low = np.max(np.stack([y_min, mean-std], -1), -1)
+        y_high = np.min(np.stack([y_max, mean+std], -1), -1)
+        ax.fill_between(range(T), y_low, y_high, alpha=.3, color=colors[pol_name])
+        ax.plot(mean, label=pol_name, color=colors[pol_name])
+    # ax.set_ylim(0, R_max+.5)
+    ax.legend(loc='upper left', facecolor=None, edgecolor='gray', bbox_to_anchor=(1.1, 0.8),)
+    fig.savefig('results/01_baseline_policies/cumulated_rewards.png', dpi=600)
+
+
+
+
 
 if __name__ == '__main__':
+    cumulated_rewards_baselines()
     for k in baseline_policy_register.keys():
         sanity_check(agent_policy_name=k)
-
-    # Unusual setup, but allows for seeing how the recovery mechanic should work
-    sanity_check(agent_policy_name='oracle_policy', teacher_policy_name='noisy_oracle_policy')
-    sanity_check(agent_policy_name='noisy_oracle_policy', teacher_policy_name='random_agent_policy')
-    sanity_check(agent_policy_name='random_agent_policy', teacher_policy_name='oracle_policy')
+    sanity_check(agent_policy_name='oracle', teacher_policy_name='noisy_oracle')
+    sanity_check(agent_policy_name='noisy_oracle', teacher_policy_name='random')
+    sanity_check(agent_policy_name='random', teacher_policy_name='oracle')

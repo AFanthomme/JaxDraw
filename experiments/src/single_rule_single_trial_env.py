@@ -103,8 +103,11 @@ def _compute_reward_from_action(action: Action, env_state: EnvState, env_params:
     old_status = env_state.target_strokes_status
     new_stroke, _ = _compute_stroke_and_pos_from_action(env_state, old_position, action, env_params)
     new_status = _compute_new_stroke_statuses(new_stroke, env_state, env_params)
-    reward = jnp.any(new_status & (~old_status)).astype(jnp.float32)
-    return reward
+    # Allow larger than 1 reward to ensure oracle always collects all
+    reward = jnp.sum(new_status & (~old_status)).astype(jnp.float32)
+    penalty = (action[2] > 0.) * env_params.false_draw_penalty * (reward < .5)
+    return reward - penalty
+    # return -penalty 
 
 def _update_env_state_from_action(rng_key: Key, env_state: EnvState, action: Action, env_params: EnvParams) -> EnvState:
     """

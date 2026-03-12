@@ -11,7 +11,8 @@ class EnvParams:
                 stroke_max_length: float = 0.7,
                 thickness: float = 0.02,
                 softness: float = 0.03,
-                quality_max_pos_dif: float = .03 ,
+                quality_max_pos_dif: float = .03,
+                false_draw_penalty: float = .1
                 ):
         self.num_target_strokes = num_target_strokes
         self.max_num_strokes=max_num_strokes
@@ -21,6 +22,7 @@ class EnvParams:
         self.thickness=thickness
         self.softness=softness
         self.quality_max_pos_dif=quality_max_pos_dif    
+        self.false_draw_penalty=false_draw_penalty    
 
     @classmethod
     def debug_config(cls):

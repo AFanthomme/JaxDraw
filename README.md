@@ -1,5 +1,7 @@
 # In-Context Reinforcement Learning for hidden-rule stroke-reproduction 
 
+This project is still in active development. 
+It's goal is to adapt the setup of "stroke reproduction" used in Behavioral Neuroscience for highly efficient, hardware-accelerated simulation, and use it as a benchmark for different RL algorithms and Agent designs. 
 
 <p float="left">
   <img src="illustrations/onpolicy_noisy_oracle.gif" width="49%" />
@@ -7,38 +9,27 @@
 </p>
 
 
-The goal of this project is to build a minimalistic, highly efficient environment that enables study of In-Context learning mechanisms.
+## Key environment features:
+* Visual observation based RL environment
+* Discrete (coarse) timesteps, continuous space for actions 
+* End-to-end hardware accelerated using Jax
+* Composable rules : "draw each line left-to-right, starting with lines at the top"
+* Reward delivered upon completing a line while repecting the (hidden) rules.
+* Stable context: rule maintained between trials in a "block" 
+* Extensive baselines and ablation studies
 
-This environment is inspired by stroke reproduction tasks used in Behavioral Neuroscience, notably the one used in "Neural representation of action symbols in primate frontal cortex, Tian *et al.* (2025)"
+**In-Context Learning :** rewards from one trial inform the agent's world model on the hidden rule for the block. 
 
-The final environment will have the following characteristics:
-* Rule-based: Depending on a (hidden) context, the agent has to reproduce strokes either left-to-right, top-to-bottom, *etc...*
-* Block design: Trials will be arranged in blocks with shared hidden rule. 
-
-These two features, combined, mean that rewards collected in one trial will update the agent's prior on the hidden rule, allowing and requiring In-Context Learning to perform optimally in a complete block.
-
-We expect this task to be quite challenging, and will need to adress the following points :
-* How to efficiently encode actions and environment state?
-* How to integrate this information across trajectories to build a "world model" ?
-* How to leverage this knowledge into actionable "planning-like" behavior (akin to the Dreamer series of models) ?
-* How to perform efficient credit assignment inside trial blocks?
-
-Therefore, we will adopt an iterative development process, of which a tentative roadmap follows:
-1) Perform Behavior Cloning of an Oracle policy on a single-rule (hence, fully observable) environment.
-2) Introduce multiple rules, while maintaining full observability and oracle supervision.
-3) Learn both earlier variants using On-Policy Reinforcement Learning instead of Behavior Cloning.
-4) Switch to block-design, perform Behavior Cloning with "Decision Transformer"-like setup.
-5) Perform full RL learning from scratch on the partially observable block-trial task.
-
-
-At every step, our goal will be to reduce the complexity of the setup as much as possible before moving on, and provide extensive baselines to promote critical evaluation of all agent performance.
-We will introduce complexities (*eg.* stateful agents, non-deterministic policies, advanced network architectures) only as the previous solution becomes incapable of solving the task (as validated via ablation studies).
-We will also emphasize mechanistic interpretability of each of the components in our proposed architectures, guided by the results of ablation studies.
-
+Studying agents that can solve this environment, as well as the failure modes that appear after ablations, can provide information on the following questions:
+* How can an agent integrate information across trials to build a "world model" ?
+* How can an agent leverage an internal world model for efficient In-Context learning ?
+* How can the agent perform credit assignment between trials in a block?
+* What would happen if we increase time resolution (and therefore the context length) by a few orders of magnitude  ?
+* What are the tradeoffs between recurrence and attention mechanism in this context ?
 
 # Running the project
-This project relies heavily on Jax, so we recommend using GPU to reproduce results and CPU only has not been tested.
-We provide gpu and tpu docker options, for now only GPU option has been tested
+We recommend using a GPU-based machine to reproduce results, although TPUs will at least be assessed in the near future. 
+
 
 We recommend beginning by running all tests on the target machine using:
 ```
@@ -52,3 +43,31 @@ trajectories rolled out from baseline policies:
 ```
 bash run_gpu.sh python experiments/01_baseline_policies_analysis.py
 ```
+
+# Roadmap 
+
+We expect the complete task to be quite challenging, and will therefore benefit from an an iterative development process in which the environment is progressively made more difficult as the agent's design and training procedure is adapted as needed to restore preformance. 
+
+The broad roadmap is as follows:
+1) Perform Behavior Cloning of an Oracle policy on a single-rule (hence, fully observable) environment.
+2) Introduce multiple rules, while maintaining full observability and oracle supervision.
+3) Learn both earlier variants using On-Policy Reinforcement Learning instead of Behavior Cloning.
+4) Switch to block-design, perform Behavior Cloning with "Decision Transformer"-like setup.
+5) Perform full RL learning from scratch on the partially observable block-trial task.
+
+
+
+
+# v0.1: First baselines
+* 4 strokes per canvas
+* No hidden rules, any well-drawn stroke is rewarded (+1), bad strokes penalized (-0.1) 
+* Oracle policy (reads env internals) : move to closest line-end, then push the pen and move to the other.
+* Noisy versions of the oracle add random gaussian noise on the movement 
+* Measure cumulative reward within one trial (over 64*512 trials) 
+
+<p align="center">
+  <img src="illustrations/cumulated_rewards.png" width="65%" />
+</p>
+
+
+
