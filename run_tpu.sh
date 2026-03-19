@@ -1,1 +1,0 @@
-docker run --rm --privileged -v /dev:/dev --mount type=bind,src=./results,dst=/app/results -it afanthomme/jax-draw:tpu-latest "$@" 
