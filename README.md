@@ -70,5 +70,7 @@ The broad roadmap is as follows:
   <img src="illustrations/cumulated_rewards.png" width="65%" />
 </p>
 
+# Next steps:
+Scaling laws for Behavior Cloning on the oracle policy
 
 

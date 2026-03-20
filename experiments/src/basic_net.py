@@ -24,9 +24,9 @@ class CoordConv2d(eqx.nn.Conv2d):
         x_augmented = jnp.concatenate([x, y_grid, x_grid], axis=0)
         return super().__call__(x_augmented)
 
-class IdentityLayer(eqx.Module):
+class IdentityLayer():
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__()
 
     def __call__(self, x: Array) -> Array:
         return x
@@ -40,45 +40,43 @@ class BasicCNN(eqx.Module):
     '''
     layers: list
 
-    def __init__(self, key, use_coord_conv:bool=False, use_layernorm:bool=True, out_scale:float=1.):
+    def __init__(self, key, use_coord_conv:bool=False, use_layernorm:bool=True):
         layer_keys = jax.random.split(key, 8)
-        n_channels_conv = [128, 256, 256, 128, 64]
-        n_channels_mlp = [256, 256, 128]
-
-
-        conv_factory = lambda *args, **kwargs: eqx.nn.Conv2d(*args, **kwargs)
-        norm_factory = lambda *args, **kwargs: IdentityLayer(*args, **kwargs)
-        # if use_coord_conv:
-        #     conv_factory = lambda *args, **kwargs: CoordConv2d.__init__(*args, **kwargs)
-        #     # Remove 2 so final shapes remain nice powers of 2 after adding coordinates, not used for output
-        #     n_channels_conv = [n-2 for i, n in enumerate(n_channels_conv) if i != len(n_channels_conv) - 1]
-        # else:
-        #     conv_factory = eqx.nn.Conv2d.__init__
-
-        # if use_layernorm:
-        #     norm_factory = eqx.nn.LayerNorm
-        # else:
-        #     identity_layer = lambda y : y
-        #     norm_factory = lambda x: identity_layer
-
-        def scaled_tanh(x):
-            return out_scale * jax.nn.tanh(x)
+        # n_channels_conv = [128, 256, 256, 128, 64]
+        # n_channels_mlp = [256, 256, 128]
         
+        n_channels_conv = [512, 1024, 1024, 1024, 256]
+        n_channels_mlp = [1024, 512, 256]
+
+        if use_coord_conv:
+            conv_factory = lambda *args, **kwargs: CoordConv2d(*args, **kwargs)
+            # Remove 2 so final shapes remain nice powers of 2 after adding coordinates, not used for output
+            for i, n in enumerate(n_channels_conv):
+                if i < len(n_channels_conv)-1:
+                    n_channels_conv[i] = n -2
+        elsactory = lambda *args, **kwargs: eqx.nn.Conv2d(*args, **kwargs)
+
+        if use_layernorm:
+            norm_factory = lambda *args, **kwargs: eqx.nn.LayerNorm(*args, **kwargs)
+        else:
+            norm_factory = lambda *args, **kwargs: IdentityLayer(*args, **kwargs)
+
+
         self.layers = [
             conv_factory(3, n_channels_conv[0], kernel_size=5, stride=2, key=layer_keys[0]),
-            # norm_factory([n_channels_conv[0], 62, 62]),
+            norm_factory([n_channels_conv[0], 62, 62]),
             jax.nn.relu, 
             conv_factory(n_channels_conv[0], n_channels_conv[1], kernel_size=5, stride=2, key=layer_keys[1]),
-            # norm_factory([n_channels_conv[1], 29, 29]),
+            norm_factory([n_channels_conv[1], 29, 29]),
             jax.nn.relu, 
             conv_factory(n_channels_conv[1], n_channels_conv[2], kernel_size=3, stride=2, key=layer_keys[2]),
-            # norm_factory([n_channels_conv[2], 14, 14]),
+            norm_factory([n_channels_conv[2], 14, 14]),
             jax.nn.relu, 
             conv_factory(n_channels_conv[2], n_channels_conv[3], kernel_size=3, stride=2, key=layer_keys[3]),
-            # norm_factory([n_channels_conv[3], 6, 6]),
+            norm_factory([n_channels_conv[3], 6, 6]),
             jax.nn.relu, 
             conv_factory(n_channels_conv[3], n_channels_conv[4], kernel_size=3, stride=2, key=layer_keys[4]),
-            # norm_factory([n_channels_conv[4], 2, 2]),
+            norm_factory([n_channels_conv[4], 2, 2]),
             jax.nn.relu, 
             jnp.ravel,
             eqx.nn.Linear(n_channels_mlp[0], n_channels_mlp[1], key=layer_keys[5]),
@@ -86,8 +84,6 @@ class BasicCNN(eqx.Module):
             eqx.nn.Linear(n_channels_mlp[1], n_channels_mlp[2], key=layer_keys[6]),
             jax.nn.relu, 
             eqx.nn.Linear(n_channels_mlp[2], 3, key=layer_keys[7]),
-            # Force network output in reasonable range, could lead to null grad but need to clip one way or another
-            scaled_tanh
         ]
 
     def __call__(self, x: FullCanvas) -> Action:
