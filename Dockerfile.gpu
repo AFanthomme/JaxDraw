@@ -1,4 +1,4 @@
-FROM ghcr.io/nvidia/jax:equinox
+FROM ghcr.io/nvidia/jax:equinox-2026-03-12
 
 WORKDIR /app
 COPY ./requirements.txt /app/requirements.txt

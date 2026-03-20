@@ -21,6 +21,7 @@ env/
 results/
 tb_logs/
 logs/
+__dep__/
 
 # Visual outputs (recursively ignore these anywhere)
 *.mp4
