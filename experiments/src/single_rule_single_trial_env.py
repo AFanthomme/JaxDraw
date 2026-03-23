@@ -205,7 +205,7 @@ def off_policy_online_rollout(
                         agent_policy: Policy, agent_state_init_fn: PolicyStateInitializer, 
                         teacher_policy: Policy, teacher_state_init_fn: PolicyStateInitializer, 
                         # Static
-                        batch_size: int, env_params: EnvParams,
+                        batch_size: int, env_params: EnvParams, visual=True
                         ) -> FullRollout:
     """
     Both agent and teacher policies are executed, actions and states tracked.
@@ -244,7 +244,12 @@ def off_policy_online_rollout(
         old_env_states = carry.env_state
         old_agent_states = carry.agent_state
         old_teacher_states = carry.teacher_state
-        old_obs: Float[Array, "B 3 H W"] = batched_generate_obs(old_env_states, env_params)
+        if visual:
+            old_obs: Float[Array, "B 3 H W"] = batched_generate_obs(old_env_states, env_params)
+        else:
+            # Not the most elegant, but for now it's good enough
+            old_obs = jnp.zeros((B, 3, env_params.size, env_params.size))
+
         new_agent_states, agent_actions = batched_agent_policy(pol_step_keys, old_agent_states, old_env_states, old_obs, env_params)
         new_teacher_states, teacher_actions = batched_teacher_policy(pol_step_keys, old_teacher_states, old_env_states, old_obs, env_params)
         
@@ -281,14 +286,14 @@ def on_policy_online_rollout(
                         # Can be traced, can be static
                         policy: Policy, state_init_fn: PolicyStateInitializer, 
                         # Static
-                        batch_size: int, env_params: EnvParams,
+                        batch_size: int, env_params: EnvParams, visual=True
                         ) -> FullRollout:
     '''
     No teacher policy implemented as wrapper to teacher policy to avoid duplicated code
     At compilation time, this will get optimized so no double copies / computations should happen (see tests)
     Randomness for env not shared with agent to explore agent stochasticity on a given env realization
     '''
-    return off_policy_online_rollout(env_rng_key, pol_rng_key, policy, state_init_fn, policy, state_init_fn, batch_size, env_params)
+    return off_policy_online_rollout(env_rng_key, pol_rng_key, policy, state_init_fn, policy, state_init_fn, batch_size, env_params, visual=visual)
 
 def offline_replay_actions(env_rng_key: Key[Array, ""], actions: ActionHistory, env_params: EnvParams) -> Tuple[EnvStateHistory, RewardHistory]:
     T = env_params.max_num_strokes

@@ -1,5 +1,4 @@
 import jax
-# Forces strict fp32 math across all GPU architectures
 jax.config.update("jax_default_matmul_precision", "float32")
 import chex 
 import pytest
@@ -13,8 +12,8 @@ B = 16
 def common_setup():
     env_params = EnvParams()
     dummy_state_init = lambda x: jax.numpy.zeros(1)
-    online_rollout_fn = jax.jit(off_policy_online_rollout, static_argnums=(2, 3, 4, 5, 6, 7))
-    onpolicy_rollout_fn = jax.jit(on_policy_online_rollout, static_argnums=(2, 3, 4, 5,))
+    online_rollout_fn = jax.jit(off_policy_online_rollout, static_argnums=(2, 3, 4, 5, 6, 7, 8))
+    onpolicy_rollout_fn = jax.jit(on_policy_online_rollout, static_argnums=(2, 3, 4, 5, 6))
     offline_replay_actions_fn = jax.jit(offline_replay_actions, static_argnums=(2,))
     offline_regenerate_obs_fn = jax.jit(offline_regenerate_observations_history, static_argnums=(1,))
     return env_params, dummy_state_init, online_rollout_fn, onpolicy_rollout_fn, offline_replay_actions_fn, offline_regenerate_obs_fn
@@ -44,7 +43,7 @@ def reference_rollout_data(request, common_setup):
         "ref_rollout": ref_rollout
     }
 
-def test_rerun_online_determinism(common_setup, reference_rollout_data):
+def test_rerun_online_determinism_visual(common_setup, reference_rollout_data):
     """Ensures that calling the JAX function again yields identical results."""
     env_params, dummy_state_init, online_rollout_fn, _,  _, _ = common_setup
     data = reference_rollout_data
@@ -53,10 +52,26 @@ def test_rerun_online_determinism(common_setup, reference_rollout_data):
         data["env_key"], data["pol_key"], 
         noisy_oracle_policy, dummy_state_init, 
         noisy_oracle_policy, dummy_state_init, 
-        B, env_params
+        B, env_params, True
     )
     
     chex.assert_trees_all_close(data["ref_rollout"], repeat_online)
+
+def test_rerun_online_determinism_no_visual(common_setup, reference_rollout_data):
+    """Ensures that calling the JAX function again yields identical results."""
+    env_params, dummy_state_init, online_rollout_fn, _,  _, _ = common_setup
+    data = reference_rollout_data
+    
+    repeat_online = online_rollout_fn(
+        data["env_key"], data["pol_key"], 
+        noisy_oracle_policy, dummy_state_init, 
+        noisy_oracle_policy, dummy_state_init, 
+        B, env_params, False
+    )
+    
+    comparison_target = data["ref_rollout"].replace(obs=jax.numpy.zeros_like(data["ref_rollout"].obs))
+    chex.assert_trees_all_close(repeat_online, comparison_target)
+
 
 @pytest.fixture
 def do_offline_replay(common_setup, reference_rollout_data):
