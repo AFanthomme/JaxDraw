@@ -6,6 +6,8 @@ import numpy as np
 
 def _canonicalize_strokes(strokes: Float[Array, "... 4"]) -> Float[Array, "... 4"]:
     """
+    Crucial for line decoding if used !! While stroke ordering is arbitrary (and treated as such by attention)
+    this is not the case for the indvidual stroke structure which needs to be fixed (not too brittle thanks to line length)
     Reorders x1,y1,x2,y2 so that (x1, y1) is always the lexicographically smaller point
     Should work on both strokes or collections using split/stack
     """

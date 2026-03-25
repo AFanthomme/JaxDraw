@@ -120,7 +120,7 @@ type Coordinate = Float[Array, "2"]
 type CoordinateBatch = Float[Array, "B 2"]
 """Float[Array, "B 2"], Value range [0, 1] to stay within frame"""
 
-type HistoryCoordinate = Float[Array, "T B 2"]
+type CoordinateHistory = Float[Array, "T B 2"]
 """Float[Array, "T B 2"], Value range [0, 1] to stay within frame"""
 
 # Actions
@@ -204,7 +204,7 @@ class EnvStateHistory(JaxDataclass):
     '''
     target_strokes: TargetStrokesHistory
     drawn_strokes: DrawnStrokesHistory
-    position: HistoryCoordinate
+    position: CoordinateHistory
     target_strokes_status: TargetStrokesStatusHistory
     trial_step: TrialStepHistory
 

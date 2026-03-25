@@ -132,7 +132,7 @@ def cumulated_rewards_baselines():
     for pol_name in colors.keys():
         policy = baseline_policy_register[pol_name]
         logging.critical(f"Starting test rollouts for agent_policy {pol_name}")
-        running_stats = RunningStats(shape=(T))
+        running_stats = RunningStats(shape=(T,))
 
         # Need to recompile after every policy change if we want both speedup and actual change
 
@@ -181,7 +181,6 @@ def cumulated_rewards_baselines():
         y_high = np.min(np.stack([y_max, mean+std], -1), -1)
         ax.fill_between(range(T), y_low, y_high, alpha=.3, color=colors[pol_name])
         ax.plot(mean, label=pol_name, color=colors[pol_name])
-    # ax.set_ylim(0, R_max+.5)
     ax.legend(loc='upper left', facecolor=None, edgecolor='gray', bbox_to_anchor=(1.1, 0.8),)
     fig.savefig('results/01_baseline_policies/cumulated_rewards.png', dpi=600)
 
@@ -190,6 +189,7 @@ def cumulated_rewards_baselines():
 
 
 if __name__ == '__main__':
+    Path('results/01_baseline_policies/').mkdir(exist_ok=True)
     cumulated_rewards_baselines()
     for k in baseline_policy_register.keys():
         sanity_check(agent_policy_name=k)

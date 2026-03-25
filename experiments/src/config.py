@@ -9,7 +9,7 @@ class EnvParams:
                 size: int = 128,
                 stroke_min_length: float = 0.1,
                 stroke_max_length: float = 0.7,
-                thickness: float = 0.02,
+                thickness: float = 0.01,
                 softness: float = 0.03,
                 quality_max_pos_dif: float = .03,
                 false_draw_penalty: float = .1

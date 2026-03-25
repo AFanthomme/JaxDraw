@@ -73,4 +73,6 @@ The broad roadmap is as follows:
 # Next steps:
 Scaling laws for Behavior Cloning on the oracle policy
 
+Initial tests using basic CNN + MLP showed very poor performance, so we decoupled image -> lines from lines -> action
+Both can be trained separately to environment precision, and some sanity checks and ablation studies will need to be performed before moving on to end-to-end training. 
 
