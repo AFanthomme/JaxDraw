@@ -13,12 +13,12 @@ class LineSetExtractor(eqx.Module):
     norm: eqx.nn.LayerNorm
 
     def __init__(self, num_lines: int, cnn_config_name: str, seed: int = 777):
-        k1, k2, k3 = jax.random.split(jax.random.PRNGKey(seed), 3)
+        k1, k2, k3 = jax.random.split(jax.random.key(seed), 3)
         # query_groups = ((num_lines, 5), (1, 2)) # x1,x2,y1,y2,line_done for each line; agent_x,agent_y 
         query_groups = ((num_lines, 7), ) # x1,x2,y1,y2,line_done,agent_x,agent_y 
 
-        self.cnn = build_convnet(config_name=cnn_config_name, seed=int(k1[0]))
-        self.decoder = build_decoder(query_groups, seed=int(k2[0]))
+        self.cnn = build_convnet(k1, config_name=cnn_config_name)
+        self.decoder = build_decoder(query_groups, key=k2)
         
         cnn_out_channels = self.cnn.out_channels
 

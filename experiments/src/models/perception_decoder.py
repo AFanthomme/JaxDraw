@@ -4,6 +4,7 @@ import equinox as eqx
 import chex
 from dataclasses import dataclass
 from typing import Optional
+from jaxtyping import Key
 
 @dataclass(frozen=True)
 class PerceptionDecoderConfig:
@@ -22,7 +23,7 @@ class DETRDecoderBlock(eqx.Module):
     norm3: eqx.nn.LayerNorm
     norm4: eqx.nn.LayerNorm
 
-    def __init__(self, config: PerceptionDecoderConfig, key: jax.Array):
+    def __init__(self, config: PerceptionDecoderConfig, key: Key):
         k1, k2, k3 = jax.random.split(key, 3)
         self.self_attn = eqx.nn.MultiheadAttention(
             num_heads=config.num_heads, query_size=config.embed_dim, key=k1
@@ -86,7 +87,15 @@ class PerceptionDecoder(eqx.Module):
         head_keys = keys[config.num_blocks + 1:]
         heads = []
         for i, (_, out_dim) in enumerate(config.query_groups):
-            heads.append(eqx.nn.Linear(config.embed_dim, out_dim, key=head_keys[i]))
+            heads.append(
+                eqx.nn.MLP(
+                in_size=config.embed_dim, 
+                out_size=out_dim, 
+                width_size=config.embed_dim, 
+                depth=1, 
+                activation=jax.nn.gelu, 
+                key=head_keys[i]
+            ))
         self.output_heads = tuple(heads)
 
     def __call__(self, memory: chex.Array) -> tuple[chex.Array, ...]:
@@ -106,7 +115,6 @@ class PerceptionDecoder(eqx.Module):
             
         return tuple(outputs)
     
-def build_decoder(query_groups: tuple[tuple[int, int], ...], seed: int):
+def build_decoder(query_groups: tuple[tuple[int, int], ...], key: Key):
     config = PerceptionDecoderConfig(query_groups)
-    key = jax.random.key(seed)
     return PerceptionDecoder(config, key)

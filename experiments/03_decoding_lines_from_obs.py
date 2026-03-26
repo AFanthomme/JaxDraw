@@ -168,9 +168,9 @@ if __name__ == '__main__':
         grad_clip: float = 1.
         batches_per_epoch: int = 500
         n_batches_val: int = 50
-        cnn_config: str = "medium"
         n_lines: int = 4
-        env_size: int = 128
+        cnn_config: str = "small"
+        env_size: int = 64
 
     run_config = RunConfig()
     print(f"Start run with config: \n {run_config}")

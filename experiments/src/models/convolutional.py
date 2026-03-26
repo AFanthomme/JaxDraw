@@ -4,6 +4,7 @@ import equinox as eqx
 import chex
 from dataclasses import dataclass
 from typing import Optional
+from jaxtyping import Key
 
 @dataclass(frozen=True)
 class ConvStageConfig:
@@ -146,9 +147,8 @@ convnet_config_register = {
     "medium": medium_model_config,
                            }
 
-def build_convnet(config: Optional[MultiStageConfig]=None, config_name:Optional[str]=None, seed: int = 777) -> MultiStageConvnet:
+def build_convnet(key: Key, config: Optional[MultiStageConfig]=None, config_name:Optional[str]=None) -> MultiStageConvnet:
     if config is None:
         assert config_name is not None
         config = convnet_config_register[config_name]
-    key = jax.random.key(seed)
     return MultiStageConvnet(config, key)

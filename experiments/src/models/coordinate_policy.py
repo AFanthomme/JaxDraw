@@ -58,7 +58,7 @@ class SelfAttentionBlock(eqx.Module):
 
 class CoordinateBasedPolicy(eqx.Module):
     line_proj: eqx.nn.Linear
-    dot_proj: eqx.nn.Linear
+    pos_proj: eqx.nn.Linear
     blocks: tuple[SelfAttentionBlock, ...]
     norm_final: eqx.nn.LayerNorm
     action_head: eqx.nn.MLP
@@ -69,7 +69,7 @@ class CoordinateBasedPolicy(eqx.Module):
         # Project lines (x1,y1,x2,y2,line_done) and 2D pos into the same embedding dimension
         # Uing separate embeddings also allows "input type encoding"
         self.line_proj = eqx.nn.Linear(5, config.embed_dim, key=keys[0])
-        self.dot_proj = eqx.nn.Linear(2, config.embed_dim, key=keys[1])
+        self.pos_proj = eqx.nn.Linear(2, config.embed_dim, key=keys[1])
         
         block_config = AttentionBlockConfig(
             embed_dim=config.embed_dim, 
@@ -86,17 +86,17 @@ class CoordinateBasedPolicy(eqx.Module):
         
         # Action head predicts the continuous action from the final pos representation
         self.action_head = eqx.nn.MLP(
-            in_size=config.embed_dim,
-            out_size=config.action_dim,
-            width_size=config.embed_dim,
-            depth=1,
-            activation=jax.nn.gelu,
+            in_size=config.embed_dim, 
+            out_size=3, 
+            width_size=config.embed_dim, 
+            depth=1, 
+            activation=jax.nn.gelu, 
             key=keys[-1]
         )
 
     def __call__(self, lines: chex.Array, pos: chex.Array) -> chex.Array:
         line_embeds = jax.vmap(self.line_proj)(lines) 
-        pos_embed = self.dot_proj(pos)
+        pos_embed = self.pos_proj(pos)
         
         # Pos first, same as "CLS", will accumulate information for output
         x = jnp.concatenate([pos_embed[None, :], line_embeds], axis=0) # (6, embed_dim)
