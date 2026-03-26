@@ -32,7 +32,7 @@ def oracle_policy(rng_key: Key, policy_state: PolicyState, env_state: EnvState, 
     # Switch to L_infty norm for easier perturbation here
     l_infty_dists = jnp.max(jnp.abs(position[None, :] - endpoints), -1)
     filtered_l_infty_dists = jnp.where(status, 2**10, l_infty_dists) 
-    pressure = (jnp.min(filtered_l_infty_dists) < env_params.quality_max_pos_dif) - .5
+    pressure = (jnp.min(filtered_l_infty_dists) < env_params.line_done_cutoff) - .5
     pen_is_down = pressure > 0
 
     # Keep l2 for choosing target points when moving to distant line (ie not drawing)
@@ -61,7 +61,7 @@ def noisy_oracle_policy(rng_key: Key, policy_state: PolicyState, env_state: EnvS
     NOTE: this can lead to widely diverging trajectories if final endpoint of one line close two other endpoints !
     """
     _, oracle_actions = oracle_policy(rng_key, policy_state, env_state, observation, env_params)
-    action_noise = jnp.array([0.9, 0.9, 0.]) * env_params.quality_max_pos_dif * jax.random.uniform(rng_key, shape=(3,), minval=-1, maxval=1)
+    action_noise = jnp.array([0.9, 0.9, 0.]) * env_params.line_done_cutoff * jax.random.uniform(rng_key, shape=(3,), minval=-1, maxval=1)
     return policy_state, oracle_actions + action_noise
 
 def make_custom_noise_level_policy(noise_level):
@@ -79,7 +79,8 @@ baseline_policy_register = {
          "random": random_agent_policy,
          "oracle": oracle_policy,
          "noisy_oracle": noisy_oracle_policy,
+         "noisy_oracle_001": make_custom_noise_level_policy(0.01), 
+         "noisy_oracle_002": make_custom_noise_level_policy(0.02), 
          "noisy_oracle_003": make_custom_noise_level_policy(0.03), 
-         "noisy_oracle_004": make_custom_noise_level_policy(0.04), 
          "noisy_oracle_006": make_custom_noise_level_policy(0.06), 
 }

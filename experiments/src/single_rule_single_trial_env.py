@@ -61,12 +61,12 @@ def _generate_observation(env_state: EnvState, env_params: EnvParams) -> FullCan
     pos_canvas = _draw_point_single_canvas(env_state.position, env_params)
     return jnp.stack((pos_canvas, draw_canvas, target_canvas), axis=0)
 
-def _is_valid_match(test_stroke: Stroke, target_stroke: Stroke, env_params: EnvParams):
+def _is_valid_match(test_stroke: Stroke, target_stroke: Stroke, env_params: EnvParams) -> Tuple[TargetStrokesStatus, Float[Array, "B S"]]: 
     """
     Checks if test_stroke matches ref_stroke based on endpoint proximity
     Tests all pairings of endpoints in parallel, and ensures not both test endpoints are close to the same target
     """
-    threshold = env_params.quality_max_pos_dif
+    cutoff = env_params.line_done_cutoff
 
     # Compute all 4 pairwise squared distances via broadcasting
     t_pts = test_stroke.reshape(2, 2)
@@ -77,20 +77,24 @@ def _is_valid_match(test_stroke: Stroke, target_stroke: Stroke, env_params: EnvP
     
     # Check that each test endpoint is within threshold of SOME ref endpoint
     min_dists_sq = jnp.min(dist, axis=1)
-    within_threshold = jnp.all(min_dists_sq < threshold)
+    within_cutoff = jnp.all(min_dists_sq < cutoff)
     
     # Check that both test endpoints are not closest to the same ref endpoint
-    l2_dist = jnp.sum((diffs**2), axis=-1)
-    closest_ref_indices = jnp.argmin(l2_dist, axis=1)
+    # Also, l1 is what will be used for reward calculation
+    l1_dist = jnp.sum(jnp.abs(diffs), axis=-1)
+    closest_ref_indices = jnp.argmin(l1_dist, axis=1)
     distinct_endpoints = closest_ref_indices[0] != closest_ref_indices[1]
-    
-    return within_threshold & distinct_endpoints
 
-def _compute_new_stroke_statuses(latest_stroke, env_state: EnvState, env_params: EnvParams) -> TargetStrokesStatus:   
-    current_matches = jax.vmap(_is_valid_match, in_axes=(None, 0, None))(latest_stroke, env_state.target_strokes, env_params)
+    # For reward, use the sum of the two endpoint distances 
+    dist_for_reward = jnp.sum(jnp.min(l1_dist, axis=1))
+    
+    return within_cutoff & distinct_endpoints, dist_for_reward
+
+def _compute_new_stroke_statuses(latest_stroke, env_state: EnvState, env_params: EnvParams) -> Tuple[TargetStrokesStatus, Float[Array, "B S"]]:   
+    current_matches, dist_for_reward = jax.vmap(_is_valid_match, in_axes=(None, 0, None))(latest_stroke, env_state.target_strokes, env_params)
     old_status = env_state.target_strokes_status
     new_status = current_matches | old_status
-    return new_status
+    return new_status, dist_for_reward
 
 def _compute_stroke_and_pos_from_action(env_state: EnvState, old_position: Coordinate, action: Action, env_params: EnvParams) -> Tuple[Stroke, Coordinate]:
     new_position = jnp.clip(env_state.position + action[:2], env_params.thickness, 1.-env_params.thickness) 
@@ -104,12 +108,16 @@ def _compute_reward_from_action(action: Action, env_state: EnvState, env_params:
     old_position = env_state.position
     old_status = env_state.target_strokes_status
     new_stroke, _ = _compute_stroke_and_pos_from_action(env_state, old_position, action, env_params)
-    new_status = _compute_new_stroke_statuses(new_stroke, env_state, env_params)
+    new_status, dist_for_reward = _compute_new_stroke_statuses(new_stroke, env_state, env_params)
     # Allow larger than 1 reward to ensure oracle always collects all
-    reward = jnp.sum(new_status & (~old_status)).astype(jnp.float32)
-    penalty = (action[2] > 0.) * env_params.false_draw_penalty * (reward < .5)
-    return reward - penalty
-    # return -penalty 
+    newly_done = new_status & (~old_status)
+    reward_integer = jnp.sum(newly_done).astype(jnp.float32)
+    penalty = (action[2] > 0.) * env_params.false_draw_penalty * (reward_integer < .5)
+    # Introduce some weighting within the binary reward : line is done even if pretty far, but then reward is low
+    # Use linear reward decay for better gradients; 2*cutoff since dist_for_reward is sum of endpoint dists
+    reward_weighted = jnp.sum(newly_done * jnp.clip(1.-.5*dist_for_reward/env_params.line_done_cutoff, 0.))
+    return reward_weighted - penalty
+
 
 def _update_env_state_from_action(rng_key: Key, env_state: EnvState, action: Action, env_params: EnvParams) -> EnvState:
     """
@@ -118,7 +126,7 @@ def _update_env_state_from_action(rng_key: Key, env_state: EnvState, action: Act
     """
     old_position = env_state.position
     latest_stroke, new_position = _compute_stroke_and_pos_from_action(env_state, old_position, action, env_params)
-    new_target_stroke_statuses = _compute_new_stroke_statuses(latest_stroke, env_state, env_params)
+    new_target_stroke_statuses, _ = _compute_new_stroke_statuses(latest_stroke, env_state, env_params)
     new_drawn_strokes = env_state.drawn_strokes.at[env_state.trial_step].set(latest_stroke)
     env_state = env_state.replace(drawn_strokes=new_drawn_strokes)
     env_state = env_state.replace(position=new_position)

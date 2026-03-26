@@ -1,6 +1,6 @@
 import pytest
 import jax
-from experiments.src.utils import RunningStats
+from experiments.src.stat_utils import RunningStats
 
 @pytest.mark.parametrize("batch_idx", range(10))
 def test_running_stats(batch_idx):

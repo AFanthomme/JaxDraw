@@ -95,8 +95,12 @@ type Reward = Float[Array, ""]
 type RewardBatch = Float[Array, "B"]
 """Float[Array, "B"] the reward obtained from stepping; scalar for now"""
 
+type RewardSequence = Float[Array, "T"]
+"""Float[Array, "T"] the reward obtained from stepping; scalar for now"""
+
 type RewardHistory = Float[Array, "T B"]
 """Float[Array, "T B"] the reward obtained from stepping; scalar for now"""
+
 
 
 # Heavy, not to be carried around mindlessly, image types
@@ -109,6 +113,9 @@ type FullCanvas = Float[Array, "3 H W"]
 type CanvasBatch = Float[Array, "B 3 H W"]
 """Float[Array, "B 3 H W"], 3 is for RGB, aka pos, drawn, target; Value range [0, 1[ for correct image conversion"""
 
+type CanvasSequence = Float[Array, "T 3 H W"]
+"""Float[Array, "T 3 H W"], no batch but time dim present, 3 is for RGB, aka pos, drawn, target; Value range [0, 1[ for correct image conversion"""
+
 type CanvasHistory = Float[Array, "T B 3 H W"]
 """Float[Array, "T B 3 H W"], 3 is for RGB, aka pos, drawn, target; Value range [0, 1[ for correct image conversion"""
 
@@ -119,6 +126,9 @@ type Coordinate = Float[Array, "2"]
 
 type CoordinateBatch = Float[Array, "B 2"]
 """Float[Array, "B 2"], Value range [0, 1] to stay within frame"""
+
+type CoordinateSequence = Float[Array, "B 2"]
+"""Float[Array, "T 2"], Value range [0, 1] to stay within frame"""
 
 type CoordinateHistory = Float[Array, "T B 2"]
 """Float[Array, "T B 2"], Value range [0, 1] to stay within frame"""
@@ -133,6 +143,12 @@ IMPORTANT : drawing happens if Action[2] > 0, not 0.5, so tanh not sigmoid
 type ActionBatch = Float[Array, "B 3"]
 """
 Float[Array, "B 3"], Value range [-1, 1], movement_vector and pressure concatenated
+IMPORTANT : drawing happens if Action[2] > 0, not 0.5, so tanh not sigmoid
+"""
+
+type ActionSequence = Float[Array, "T 3"]
+"""
+Float[Array, "T 3"], Value range [-1, 1], movement_vector and pressure concatenated
 IMPORTANT : drawing happens if Action[2] > 0, not 0.5, so tanh not sigmoid
 """
 
@@ -187,8 +203,6 @@ class EnvStateBatch(JaxDataclass):
     position: CoordinateBatch
     target_strokes_status: TargetStrokesStatusBatch
     trial_step: TrialStepBatch
-
-
 
 @chex.dataclass(frozen=True)
 class EnvStateHistory(JaxDataclass):

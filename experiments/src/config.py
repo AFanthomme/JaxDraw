@@ -11,7 +11,7 @@ class EnvParams:
                 stroke_max_length: float = 0.7,
                 thickness: float = 0.01,
                 softness: float = 0.03,
-                quality_max_pos_dif: float = .03,
+                line_done_cutoff: float = .05,
                 false_draw_penalty: float = .1
                 ):
         self.num_target_strokes = num_target_strokes
@@ -21,7 +21,7 @@ class EnvParams:
         self.stroke_max_length=stroke_max_length
         self.thickness=thickness
         self.softness=softness
-        self.quality_max_pos_dif=quality_max_pos_dif    
+        self.line_done_cutoff=line_done_cutoff    
         self.false_draw_penalty=false_draw_penalty    
 
     @classmethod
