@@ -29,14 +29,14 @@ def save_gif(savepath: Path, images: CanvasSequence, positions: CoordinateSequen
         nx, ny = positions[min(t+1, len(positions))]
 
         agent_line.set_data([x, x+dxa], [y, y+dya])
-        leg.get_texts()[0].set_text(f'agent: p={pa:.2f}')
-        leg.get_texts()[1].set_text(f'agent reward: {agent_rewards[t]:.2f}')
+        leg.get_texts()[0].set_text(f'Agent draw: p={.5+pa:.2f}')
+        leg.get_texts()[1].set_text(f'Agent reward: {agent_rewards[t]:.2f}')
         if teacher_actions is not None:
             assert teacher_rewards is not None
             dxt, dyt, pt = teacher_actions[t]
             teacher_line.set_data([x, x+dxt], [y, y+dyt])
-            leg.get_texts()[2].set_text(f'teacher: p={pt:.2f}')
-            leg.get_texts()[3].set_text(f'teacher reward: {teacher_rewards[t]:.2f}')
+            leg.get_texts()[2].set_text(f'Teacher draw: p={.5+pt:.2f}')
+            leg.get_texts()[3].set_text(f'Teacher reward: {teacher_rewards[t]:.2f}')
         start_dots.set_offsets([x, y])
         end_dots.set_offsets([nx, ny])
 

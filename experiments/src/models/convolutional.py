@@ -121,6 +121,25 @@ class MultiStageConvnet(eqx.Module):
         return x
 
 
+tiny_model_config = MultiStageConfig(
+    in_channels=3,
+    stages=(
+        ConvStageConfig(num_blocks=1, out_channels=32, stride=2), 
+        ConvStageConfig(num_blocks=1, out_channels=32, stride=2), 
+        ConvStageConfig(num_blocks=1, out_channels=32, stride=2), 
+        ConvStageConfig(num_blocks=1, out_channels=64, stride=2), 
+    ),
+)
+
+smaller_model_config = MultiStageConfig(
+    in_channels=3,
+    stages=(
+        ConvStageConfig(num_blocks=1, out_channels=32, stride=2), 
+        ConvStageConfig(num_blocks=1, out_channels=64, stride=2), 
+        ConvStageConfig(num_blocks=1, out_channels=128, stride=2), 
+        ConvStageConfig(num_blocks=1, out_channels=128, stride=2), 
+    ),
+)
 
 
 small_model_config = MultiStageConfig(
@@ -132,19 +151,33 @@ small_model_config = MultiStageConfig(
         ConvStageConfig(num_blocks=2, out_channels=256, stride=2), 
     ),
 )
-medium_model_config = MultiStageConfig(
+medium_wide_model_config = MultiStageConfig(
     in_channels=3,
     stages=(
-        ConvStageConfig(num_blocks=2, out_channels=64, stride=2), 
-        ConvStageConfig(num_blocks=2, out_channels=128, stride=2), 
+        ConvStageConfig(num_blocks=1, out_channels=64, stride=2), 
+        ConvStageConfig(num_blocks=1, out_channels=128, stride=2), 
         ConvStageConfig(num_blocks=1, out_channels=256, stride=2), 
         ConvStageConfig(num_blocks=1, out_channels=512, stride=2), 
     ),
 )
 
+medium_deep_model_config = MultiStageConfig(
+    in_channels=3,
+    stages=(
+        ConvStageConfig(num_blocks=2, out_channels=32, stride=2), 
+        ConvStageConfig(num_blocks=4, out_channels=64, stride=2), 
+        ConvStageConfig(num_blocks=4, out_channels=128, stride=2), 
+        ConvStageConfig(num_blocks=4, out_channels=256, stride=2), 
+    ),
+)
+
+
 convnet_config_register = {
     "small": small_model_config, 
-    "medium": medium_model_config,
+    "smaller": smaller_model_config, 
+    "medium_wide": medium_wide_model_config,
+    "medium_deep": medium_deep_model_config,
+    'tiny': tiny_model_config,
                            }
 
 def build_convnet(key: Key, config: Optional[MultiStageConfig]=None, config_name:Optional[str]=None) -> MultiStageConvnet:

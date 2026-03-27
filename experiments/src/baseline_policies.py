@@ -64,7 +64,7 @@ def noisy_oracle_policy(rng_key: Key, policy_state: PolicyState, env_state: EnvS
     action_noise = jnp.array([0.9, 0.9, 0.]) * env_params.line_done_cutoff * jax.random.uniform(rng_key, shape=(3,), minval=-1, maxval=1)
     return policy_state, oracle_actions + action_noise
 
-def make_custom_noise_level_policy(noise_level):
+def make_custom_noise_level_oracle(noise_level):
     def f(rng_key: Key, policy_state: PolicyState, env_state: EnvState, observation: FullCanvas, env_params: EnvParams) -> Tuple[PolicyState, Action]:
         """
         Allows for slightly imperfect trajectories
@@ -79,8 +79,9 @@ baseline_policy_register = {
          "random": random_agent_policy,
          "oracle": oracle_policy,
          "noisy_oracle": noisy_oracle_policy,
-         "noisy_oracle_001": make_custom_noise_level_policy(0.01), 
-         "noisy_oracle_002": make_custom_noise_level_policy(0.02), 
-         "noisy_oracle_003": make_custom_noise_level_policy(0.03), 
-         "noisy_oracle_006": make_custom_noise_level_policy(0.06), 
+         "noisy_oracle_001": make_custom_noise_level_oracle(0.01), 
+         "noisy_oracle_002": make_custom_noise_level_oracle(0.02), 
+         "noisy_oracle_003": make_custom_noise_level_oracle(0.03), 
+         "noisy_oracle_006": make_custom_noise_level_oracle(0.06), 
+         "noisy_oracle_1_128": make_custom_noise_level_oracle(1./128), 
 }
