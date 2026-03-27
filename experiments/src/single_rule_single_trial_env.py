@@ -194,7 +194,7 @@ def _batched_compute_reward_from_action(actions: ActionBatch, env_states: EnvSta
 def _wrap_policy_for_batch(policy: Policy) -> BatchedPolicy:
     def _unwrapped_logic(rng_key, policy_state, env_state, observation, env_params):
         return policy(rng_key, policy_state, EnvState(**env_state.__dict__), observation, env_params)
-    f = jax.vmap(_unwrapped_logic, in_axes=(0, 0, 0, None, None))
+    f = jax.vmap(_unwrapped_logic, in_axes=(0, 0, 0, 0, None))
     def casted_f(rng_key: KeyBatch, policy_state: PolicyStateBatch, env_state: EnvStateBatch, observation: CanvasBatch, env_params: EnvParams):
         state, action = f(rng_key, policy_state, EnvState(**env_state.__dict__), observation, env_params)
         return cast(PolicyStateBatch, state), cast(ActionBatch, action)

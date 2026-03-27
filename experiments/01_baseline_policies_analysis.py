@@ -71,9 +71,9 @@ def cumulated_rewards_baselines():
 
 if __name__ == '__main__':
     Path('results/01_baseline_policies/').mkdir(exist_ok=True)
-    # for k in baseline_policy_register.keys():
-    #     do_sanity_check(agent_policy_name=k)
-    # do_sanity_check(agent_policy_name='oracle', teacher_policy_name='noisy_oracle')
-    # do_sanity_check(agent_policy_name='noisy_oracle', teacher_policy_name='random')
-    # do_sanity_check(agent_policy_name='random', teacher_policy_name='oracle')
-    cumulated_rewards_baselines()
+    for k in baseline_policy_register.keys():
+        do_sanity_check(agent_policy_name=k)
+    do_sanity_check(agent_policy_name='oracle', teacher_policy_name='noisy_oracle')
+    do_sanity_check(agent_policy_name='noisy_oracle', teacher_policy_name='random')
+    do_sanity_check(agent_policy_name='random', teacher_policy_name='oracle')
+    # cumulated_rewards_baselines()

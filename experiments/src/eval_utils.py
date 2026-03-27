@@ -6,9 +6,10 @@ from experiments.src.image_utils import save_gif
 from pathlib import Path
 from src.single_rule_single_trial_env import on_policy_online_rollout, off_policy_online_rollout
 from experiments.src.stat_utils import RunningStats
+import equinox as eqx
 
 def sanity_check(env_params: EnvParams, agent_policy: Policy, agent_state_init: PolicyStateInitializer, 
-                 title: str, savepath: Path, n_trajs: int=8, seed: int=777,
+                 title: str, savepath: Path, n_trajs: int=8, seed: int=777, static_agent: Bool=True, static_teacher: Bool=True,
                  teacher_policy: Optional[Policy]=None, teacher_state_init: Optional[PolicyStateInitializer]=None):
 
     assert savepath.exists(), "Please create the output directory for sanity_check before calling it !"
@@ -17,14 +18,15 @@ def sanity_check(env_params: EnvParams, agent_policy: Policy, agent_state_init: 
     pol_key = jax.random.key(seed)
 
     if teacher_policy is None:
-        online_rollout_fn = jax.jit(on_policy_online_rollout, static_argnums=(2, 3, 4, 5))
+        online_rollout_fn = eqx.filter_jit(on_policy_online_rollout)
         full_rollout = online_rollout_fn(# Traced
                                     env_key, pol_key, 
                                     # Static
                                     agent_policy, agent_state_init, 
                                     n_trajs, env_params)
     else:
-        offline_rollout_fn = jax.jit(off_policy_online_rollout, static_argnums=(2, 3, 4, 5, 6, 7))
+        assert teacher_state_init is not None, "Provide teacher init fn if you provide teacher_policy!"
+        offline_rollout_fn = eqx.filter_jit(off_policy_online_rollout)
         full_rollout = offline_rollout_fn(# Traced
                                     env_key, pol_key, 
                                     # Static
@@ -43,14 +45,14 @@ def sanity_check(env_params: EnvParams, agent_policy: Policy, agent_state_init: 
     obs: Float["Array", "B T H W 3"] = full_rollout.obs.transpose(1, 0, 4, 3, 2)
 
     for b in range(n_trajs):
-        if teacher_policy is None:
+        if teacher_policy is not None:
             save_gif(savepath / f'traj_{b}.gif', obs[b], positions[b], agent_actions[b], agent_rewards[b], teacher_actions[b], teacher_rewards[b], title=title)
         else:
             save_gif(savepath / f'traj_{b}.gif', obs[b], positions[b], agent_actions[b], agent_rewards[b], None, None, title=title)
 
 def compute_cumulated_rewards(env_params: EnvParams, policy: Policy, state_init: PolicyStateInitializer, n_batches: int=128, batch_size: int=128, seed: int=777):
     T = env_params.max_num_strokes
-    online_rollout_fn = jax.jit(on_policy_online_rollout, static_argnums=(2, 3, 4, 5))
+    online_rollout_fn = eqx.filter_jit(on_policy_online_rollout)
     running_stats = RunningStats(shape=(T,))
 
     for b in range(n_batches):

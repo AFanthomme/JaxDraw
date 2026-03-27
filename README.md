@@ -3,7 +3,7 @@
 This project is still under active development, see roadmap and first results below.
 
 <p float="left">
-  <img src="illustrations/onpolicy_noisy_oracle.gif" width="49%" />
+  <img src="illustrations/onpolicy_network_agent.gif" width="49%" />
   <img src="illustrations/offpolicy_agent_random_teacher_oracle.gif" width="49%" />
 </p>
 
@@ -26,6 +26,42 @@ Studying agents that can solve this environment, as well as the failure modes th
 * What would happen if we increase time resolution (and therefore the context length) by a few orders of magnitude ?
 * What are the tradeoffs between recurrence and attention mechanism in this context ?
 
+
+
+
+# v0.2: Policy representability and Behavior Cloning
+Before learning through Reinforcement, we want to ensure policies are representable.
+
+First tests showed very poor results using basic CNN + MLP networks.
+
+We investigated this failure by splitting the problem in two parts:
+1) Decision: Can the action be extracted from the line coordinates ?
+2) Perception: Can the line coordinates be extracted from the observation ? 
+
+In both cases, attention seemed very natural due to the unordered nature of the set of lines.
+
+Perception was heavily influenced by DeTr and relied on Hungarian matching, while Decision was implemented using standard self-attention and was significantly easier to train due to the lower memory / compute requirements compared to image analysis.
+
+Both parts being able to reach "environment precision" (here defined as the inverse of the 128 pixels resolution) when trained separately, we combined them into a single image -> action network which was trained end-to-end to reproduce the oracle policy:
+
+<p align="center">
+  <img src="illustrations/cumulated_rewards.png" width="65%" />
+</p>
+
+Note that the reward has been modified to no-longer be binary, but instead ramping up from 0 to 1 as the "drawn line" endpoints get closer to the "target line" endpoints, which should help with finer convergence once we introduce RL training.
+
+Now that we obtained this first sign-of-life, immediate next steps are:
+* Ablation studies: quantifying the contribution of the attention mechanism in the decoder.
+* RL fine-tuning: starting from a partially-trained BC network, can PPO reach a valid solution?
+
+# Roadmap 
+
+While exact next steps will be strongly influenced by intermediate results, the broad roadmap is as follows:
+1) Introduce multiple rules, while maintaining full observability and oracle supervision.
+2) Learn both earlier variants using On-Policy Reinforcement Learning instead of Behavior Cloning.
+3) Switch to block-design, perform Behavior Cloning with "Decision Transformer"-like setup.
+4) Perform full RL learning from scratch on the partially observable block-trial task.
+
 # Running the project
 This project is intended to be ran via Docker on a CUDA-enabled machine, see the [Nvidia official instructions](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) for help setting it up.
 
@@ -44,35 +80,4 @@ Then, experiments can be launched using:
 bash run_gpu.sh python experiments/XX.py
 ```
 which will bind the results folder and use it to store the outputs of the experiment.
-
-# Roadmap 
-
-We expect the complete task to be quite challenging, and will therefore benefit from an an iterative development process in which the environment is progressively made more difficult as the agent's design and training procedure is adapted as needed to restore preformance. 
-
-The broad roadmap is as follows:
-1) Perform Behavior Cloning of an Oracle policy on a single-rule (hence, fully observable) environment.
-2) Introduce multiple rules, while maintaining full observability and oracle supervision.
-3) Learn both earlier variants using On-Policy Reinforcement Learning instead of Behavior Cloning.
-4) Switch to block-design, perform Behavior Cloning with "Decision Transformer"-like setup.
-5) Perform full RL learning from scratch on the partially observable block-trial task.
-
-
-
-
-# v0.1: First baselines
-* 4 strokes per canvas
-* No hidden rules, any well-drawn stroke is rewarded (+1), bad strokes penalized (-0.1) 
-* Oracle policy (reads env internals) : move to closest line-end, then push the pen and move to the other.
-* Noisy versions of the oracle add random gaussian noise on the movement 
-* Measure cumulative reward within one trial (over 64*512 trials) 
-
-<p align="center">
-  <img src="illustrations/cumulated_rewards.png" width="65%" />
-</p>
-
-# Next steps:
-Scaling laws for Behavior Cloning on the oracle policy
-
-Initial tests using basic CNN + MLP showed very poor performance, so we decoupled image -> lines from lines -> action
-Both can be trained separately to environment precision, and some sanity checks and ablation studies will need to be performed before moving on to end-to-end training. 
 
