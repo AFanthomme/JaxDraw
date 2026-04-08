@@ -12,7 +12,7 @@ import optax
 from src.custom_types import *
 import wandb
 from src.single_rule_single_trial_env import on_policy_online_rollout
-from src.baseline_policies import oracle_policy
+from src.baseline_policies import closest_line_policy
 from src.config import EnvParams
 from src.models.line_set_extractor import LineSetExtractor
 from dataclasses import dataclass
@@ -93,7 +93,7 @@ def main(cfg):
         rollout: FullRollout = on_policy_online_rollout(# Traced
                         env_key, pol_key, 
                         # Static
-                        oracle_policy, dummy_state_init, 
+                        closest_line_policy, dummy_state_init, 
                         cfg.batch_size, env_params, visual=True)
         
         state_history = rollout.env_state

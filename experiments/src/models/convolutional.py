@@ -115,6 +115,7 @@ class MultiStageConvnet(eqx.Module):
         self.blocks = tuple(blocks_list)    
         self.out_channels = config.stages[-1].out_channels   
 
+    @eqx.filter_checkpoint
     def __call__(self, x: chex.Array) -> chex.Array:
         for block in self.blocks:
             x = block(x)
@@ -151,6 +152,17 @@ small_model_config = MultiStageConfig(
         ConvStageConfig(num_blocks=2, out_channels=256, stride=2), 
     ),
 )
+
+medium_model_config = MultiStageConfig(
+    in_channels=3,
+    stages=(
+        ConvStageConfig(num_blocks=1, out_channels=64, stride=2), 
+        ConvStageConfig(num_blocks=1, out_channels=128, stride=2), 
+        ConvStageConfig(num_blocks=1, out_channels=256, stride=2), 
+        ConvStageConfig(num_blocks=1, out_channels=256, stride=2), 
+    ),
+)
+
 medium_wide_model_config = MultiStageConfig(
     in_channels=3,
     stages=(
@@ -175,8 +187,9 @@ medium_deep_model_config = MultiStageConfig(
 convnet_config_register = {
     "small": small_model_config, 
     "smaller": smaller_model_config, 
-    "medium_wide": medium_wide_model_config,
+    "medium": medium_model_config,
     "medium_deep": medium_deep_model_config,
+    "medium_wide": medium_wide_model_config,
     'tiny': tiny_model_config,
                            }
 

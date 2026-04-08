@@ -4,9 +4,10 @@ Tons of boilerplate, but this makes nice usable tooltips in pylance so probably 
 Try to only give types to things that might end up in a carried / returned pytree, not internals
 '''
 import chex 
-from typing import Tuple, Protocol, TypeVar,dataclass_transform,Generic,Optional
+from typing import Tuple, Protocol, TypeVar,dataclass_transform,Generic,Literal
 from jaxtyping import Float, Array, Key, Bool, Int
-from .config import EnvParams
+from .config import EnvParams, RulesetLiteral
+from typing import Optional
 
 # Strokes-related types:
 type Stroke = Float[Array, "4"]
@@ -20,7 +21,6 @@ type TargetStrokes = Float[Array, "S 4"]
 Float[Array, "S 4"]\n
 (x_start, y_start, x_end, y_end); values in [0, 1]; (start,end) expected to be lexicographically ordered
 """
-
 
 type TargetStrokesBatch = Float[Array, "B S 4"]
 """
@@ -158,6 +158,55 @@ Float[Array, "T B 3"], Value range [-1, 1], movement_vector and pressure concate
 IMPORTANT : drawing happens if Action[2] > 0, not 0.5, so tanh not sigmoid
 """
 
+type SortMode = Int[Array, ""]
+"Integer used in the line ordering"
+
+type SortModeBatch = Int[Array, "B"]
+"Integer used in the line ordering"
+
+type SortModeSequence = Int[Array, "T"]
+"Integer used in the line ordering"
+
+type SortModeHistory = Int[Array, "T B"]
+"Integer used in the line ordering"
+
+type RefAngle = Float[Array, ""]
+"Angle used in the line ordering"
+
+type RefAngleBatch = Float[Array, "B"]
+"Angle used in the line ordering"
+
+type RefAngleSequence = Float[Array, "T"]
+"Angle used in the line ordering"
+
+type RefAngleHistory = Float[Array, "T B"]
+"Angle used in the line ordering"
+
+type RefPoint = Float[Array, "2"]
+"Reference point used in the line ordering"
+
+type RefPointBatch = Float[Array, "B 2"]
+"Reference point used in the line ordering"
+
+type RefPointSequence = Float[Array, "T 2"]
+"Reference point used in the line ordering"
+
+type RefPointHistory = Float[Array, "T B 2"]
+"Reference point used in the line ordering"
+
+type Decreasing = Bool[Array, ""]
+"Boolean used to reverse the line ordering"
+
+type DecreasingBatch = Bool[Array, "B"]
+"Boolean used to reverse the line ordering"
+
+type DecreasingSequence = Bool[Array, "T"]
+"Boolean used to reverse the line ordering"
+
+type DecreasingHistory = Bool[Array, "T B"]
+"Boolean used to reverse the line ordering"
+
+
 type KeyBatch = Key[Array, "B"]
 
 Ty = TypeVar("Ty")
@@ -185,6 +234,10 @@ class EnvState(JaxDataclass):
     position: Coordinate
     target_strokes_status: TargetStrokesStatus
     trial_step: TrialStep
+    sort_mode: SortMode
+    ref_angle: RefAngle
+    ref_point: RefPoint
+    decreasing: Decreasing
     
 @chex.dataclass(frozen=True)
 class EnvStateBatch(JaxDataclass):
@@ -203,6 +256,11 @@ class EnvStateBatch(JaxDataclass):
     position: CoordinateBatch
     target_strokes_status: TargetStrokesStatusBatch
     trial_step: TrialStepBatch
+    sort_mode: SortModeBatch
+    ref_angle: RefAngleBatch
+    ref_point: RefPointBatch
+    decreasing: DecreasingBatch
+
 
 @chex.dataclass(frozen=True)
 class EnvStateHistory(JaxDataclass):
@@ -221,6 +279,10 @@ class EnvStateHistory(JaxDataclass):
     position: CoordinateHistory
     target_strokes_status: TargetStrokesStatusHistory
     trial_step: TrialStepHistory
+    sort_mode: SortModeHistory
+    ref_angle: RefAngleHistory
+    ref_point: RefPointHistory
+    decreasing: DecreasingHistory
 
 # NOTE: Since these are meant to be used by scan, assume they are already batched even if B=1 to encourage the 
 # correct scan(vmap) pattern
@@ -298,7 +360,6 @@ class BatchedPolicy(Protocol):
     '''
     def __call__(self, rng_key: Key[Array, "B"], policy_state: PolicyStateBatch, env_state: EnvStateBatch, observation: CanvasBatch, env_params: EnvParams) -> Tuple[PolicyStateBatch,ActionBatch]:
         ...
-
 
 class PolicyStateInitializer(Protocol):
     def __call__(self, rng_key: Key[Array, ""]) -> PolicyState:

@@ -4,12 +4,12 @@ import numpy as np
 import jax.numpy as jnp
 from experiments.src.image_utils import save_gif
 from pathlib import Path
-from src.single_rule_single_trial_env import on_policy_online_rollout, off_policy_online_rollout
+from src.ordered_lines_env import on_policy_online_rollout, off_policy_online_rollout
 from experiments.src.stat_utils import RunningStats
 import equinox as eqx
 
 def sanity_check(env_params: EnvParams, agent_policy: Policy, agent_state_init: PolicyStateInitializer, 
-                 title: str, savepath: Path, n_trajs: int=8, seed: int=777, static_agent: Bool=True, static_teacher: Bool=True,
+                 title: str, savepath: Path, n_trajs: int=32, seed: int=777, static_agent: Bool=True, static_teacher: Bool=True,
                  teacher_policy: Optional[Policy]=None, teacher_state_init: Optional[PolicyStateInitializer]=None):
 
     assert savepath.exists(), "Please create the output directory for sanity_check before calling it !"
@@ -70,7 +70,7 @@ def compute_cumulated_rewards(env_params: EnvParams, policy: Policy, state_init:
 
 
     out_dict = {'mean': np.asarray(running_stats.mean), 'std': np.sqrt(np.asarray(running_stats.var)), 
-                        'min': np.asarray(running_stats.min), 'max': np.asarray(running_stats.max)}
+                        'min': np.asarray(running_stats.min), 'max': np.asarray(running_stats.max),}
     
     return out_dict
 

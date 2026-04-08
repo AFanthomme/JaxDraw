@@ -3,8 +3,8 @@ jax.config.update("jax_default_matmul_precision", "float32")
 import chex 
 import pytest
 from experiments.src.custom_types import *
-from experiments.src.single_rule_single_trial_env import on_policy_online_rollout, off_policy_online_rollout, offline_regenerate_observations_history, offline_replay_actions
-from experiments.src.baseline_policies import random_agent_policy, noisy_oracle_policy
+from experiments.src.ordered_lines_env import on_policy_online_rollout, off_policy_online_rollout, offline_regenerate_observations_history, offline_replay_actions
+from experiments.src.baseline_policies import baseline_policy_register
 
 B = 16
 
@@ -27,12 +27,15 @@ def reference_rollout_data(request, common_setup):
     env_key = jax.random.key(777 + batch_idx)
     pol_key = jax.random.key(777 + batch_idx)
 
+    # Use noisy policy to ensure we also reproduce policy rollout noise
+    policy = baseline_policy_register['noisy_ordered']
+
     # Generate the ground-truth rollout
     # Putting different policies in teacher/agent covered in experimetns, here use same to compare to onpolicy
     ref_rollout = online_rollout_fn(
         env_key, pol_key, 
-        noisy_oracle_policy, dummy_state_init, 
-        noisy_oracle_policy, dummy_state_init,
+        policy, dummy_state_init, 
+        policy, dummy_state_init,
         B, env_params
     )
     
@@ -48,10 +51,11 @@ def test_rerun_online_determinism_visual(common_setup, reference_rollout_data):
     env_params, dummy_state_init, online_rollout_fn, _,  _, _ = common_setup
     data = reference_rollout_data
     
+    policy = baseline_policy_register['noisy_ordered']
     repeat_online = online_rollout_fn(
         data["env_key"], data["pol_key"], 
-        noisy_oracle_policy, dummy_state_init, 
-        noisy_oracle_policy, dummy_state_init, 
+        policy, dummy_state_init, 
+        policy, dummy_state_init, 
         B, env_params, True
     )
     
@@ -62,10 +66,12 @@ def test_rerun_online_determinism_no_visual(common_setup, reference_rollout_data
     env_params, dummy_state_init, online_rollout_fn, _,  _, _ = common_setup
     data = reference_rollout_data
     
+    policy = baseline_policy_register['noisy_ordered']
+
     repeat_online = online_rollout_fn(
         data["env_key"], data["pol_key"], 
-        noisy_oracle_policy, dummy_state_init, 
-        noisy_oracle_policy, dummy_state_init, 
+        policy, dummy_state_init, 
+        policy, dummy_state_init, 
         B, env_params, False
     )
     
@@ -105,9 +111,10 @@ def test_onpolicy_substitution(common_setup, reference_rollout_data):
     env_params, dummy_state_init, _, on_policy_online_rollout, _, _ = common_setup
     data = reference_rollout_data
     
+    policy = baseline_policy_register['noisy_ordered']
     repeat_onpolicy = on_policy_online_rollout(
         data["env_key"], data["pol_key"], 
-        noisy_oracle_policy, dummy_state_init, 
+        policy, dummy_state_init, 
         B, env_params
     )
     

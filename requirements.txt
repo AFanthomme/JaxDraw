@@ -6,3 +6,4 @@ jaxtyping
 pytest
 matplotlib
 wandb
+xprof

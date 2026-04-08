@@ -18,7 +18,7 @@ def random_agent_policy(rng_key: Key, agent_state: PolicyState, env_state: EnvSt
     new_policy_state = agent_state
     return new_policy_state, jnp.concat((movement, pressure))
 
-def oracle_policy(rng_key: Key, policy_state: PolicyState, env_state: EnvState, observation: FullCanvas, env_params: EnvParams) -> Tuple[PolicyState, Action]:
+def closest_line_policy(rng_key: Key, policy_state: PolicyState, env_state: EnvState, observation: FullCanvas, env_params: EnvParams) -> Tuple[PolicyState, Action]:
     """
     Having access to env_state is cheating, but that's what Oracles are all about
     """
@@ -55,33 +55,55 @@ def oracle_policy(rng_key: Key, policy_state: PolicyState, env_state: EnvState, 
 
     return policy_state, jnp.concat((movement, jnp.array([pressure])))
 
-def noisy_oracle_policy(rng_key: Key, policy_state: PolicyState, env_state: EnvState, observation: FullCanvas, env_params: EnvParams) -> Tuple[PolicyState, Action]:
-    """
-    Allows for slightly imperfect trajectories
-    NOTE: this can lead to widely diverging trajectories if final endpoint of one line close two other endpoints !
-    """
-    _, oracle_actions = oracle_policy(rng_key, policy_state, env_state, observation, env_params)
-    action_noise = jnp.array([0.9, 0.9, 0.]) * env_params.line_done_cutoff * jax.random.uniform(rng_key, shape=(3,), minval=-1, maxval=1)
-    return policy_state, oracle_actions + action_noise
+def ordered_lines_policy(rng_key: Key, policy_state: PolicyState, env_state: EnvState, observation: FullCanvas, env_params: EnvParams) -> Tuple[PolicyState, Action]:
+    # This policy assumes lines in env_state are already sorted according to the rule
+    all_lines_done = jnp.all(env_state.target_strokes_status)
+    next_line_idx = jnp.argmax(~env_state.target_strokes_status) # returns first not done
+    next_line_endpoints = env_state.target_strokes[next_line_idx]
+    s, e = jnp.split(next_line_endpoints, 2)
 
-def make_custom_noise_level_oracle(noise_level):
+    ds_l2 = jnp.sum((env_state.position - s)**2)
+    ds_linf = jnp.max(jnp.abs(env_state.position - s))
+    de_l2 = jnp.sum((env_state.position - e)**2)
+    de_linf = jnp.max(jnp.abs(env_state.position - e))
+    is_linf_close_to_s = (ds_linf < env_params.line_done_cutoff) 
+    is_linf_close_to_e = (de_linf < env_params.line_done_cutoff) 
+    is_l2_closer_to_e = (de_l2 < ds_l2)
+
+    # If close to one, choose the other as target; if not, go to l2_closest
+    is_drawing = is_linf_close_to_e | is_linf_close_to_s
+    target_drawing =  (is_linf_close_to_s * e) + (is_linf_close_to_e * s)
+    target_moving = is_l2_closer_to_e * e + (1-is_l2_closer_to_e) * s 
+    target = is_drawing * target_drawing + (1-is_drawing) * target_moving
+
+    movement = jnp.where(all_lines_done, jnp.zeros(2, dtype=jnp.float32), target - env_state.position)
+    pressure = jnp.where(all_lines_done, 0., is_drawing - .5)
+    
+    return policy_state, jnp.concat((movement, jnp.array([pressure])))
+
+def ordered_lines__ordered_endpoints_policy(rng_key: Key, policy_state: PolicyState, env_state: EnvState, observation: FullCanvas, env_params: EnvParams) -> Tuple[PolicyState, Action]:
+    # This policy assumes lines and their endpoints in env_state are already sorted according to the rule
+    raise NotImplementedError
+
+def make_custom_noise_level_policy(policy_fn: Policy, noise_level: float):
     def f(rng_key: Key, policy_state: PolicyState, env_state: EnvState, observation: FullCanvas, env_params: EnvParams) -> Tuple[PolicyState, Action]:
         """
         Allows for slightly imperfect trajectories
         NOTE: this can lead to widely diverging trajectories if final endpoint of one line close two other endpoints !
         """
-        _, oracle_actions = oracle_policy(rng_key, policy_state, env_state, observation, env_params)
+        _, oracle_actions = policy_fn(rng_key, policy_state, env_state, observation, env_params)
         action_noise = jnp.array([noise_level, noise_level, 0.]) * jax.random.uniform(rng_key, shape=(3,), minval=-1, maxval=1)
         return policy_state, oracle_actions + action_noise 
     return f
 
 baseline_policy_register = {
          "random": random_agent_policy,
-         "oracle": oracle_policy,
-         "noisy_oracle": noisy_oracle_policy,
-         "noisy_oracle_001": make_custom_noise_level_oracle(0.01), 
-         "noisy_oracle_002": make_custom_noise_level_oracle(0.02), 
-         "noisy_oracle_003": make_custom_noise_level_oracle(0.03), 
-         "noisy_oracle_006": make_custom_noise_level_oracle(0.06), 
-         "noisy_oracle_1_128": make_custom_noise_level_oracle(1./128), 
+         "closest": closest_line_policy,
+         "noisy_closest": make_custom_noise_level_policy(closest_line_policy, 1./128),
+         "noisy_closest_001": make_custom_noise_level_policy(closest_line_policy, 0.01), 
+         "noisy_closest_002": make_custom_noise_level_policy(closest_line_policy, 0.02), 
+         "noisy_closest_003": make_custom_noise_level_policy(closest_line_policy, 0.03), 
+         "noisy_closest_006": make_custom_noise_level_policy(closest_line_policy, 0.06), 
+         "ordered_lines_policy": ordered_lines_policy,
+         "noisy_ordered": make_custom_noise_level_policy(ordered_lines_policy, 1./128),
 }

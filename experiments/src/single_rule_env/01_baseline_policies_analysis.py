@@ -6,10 +6,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 from experiments.src.eval_utils import sanity_check, compute_cumulated_rewards
-from typing import Optional
 
-def do_sanity_check(agent_policy_name: str, ruleset: RulesetLiteral, teacher_policy_name: Optional[str]=None):
-    env_params = EnvParams(ruleset=ruleset)
+
+def do_sanity_check(agent_policy_name: str, teacher_policy_name: Optional[str]=None):
+    env_params = EnvParams()
     def dummy_state_init(rng_key: Key) -> PolicyState:
         return jnp.zeros(1)
 
@@ -18,24 +18,26 @@ def do_sanity_check(agent_policy_name: str, ruleset: RulesetLiteral, teacher_pol
     if teacher_policy_name is None:
         teacher_policy = None
         title = f'On-policy, name: {agent_policy_name}'
-        savepath = Path(f'results/01_baseline_policies/{ruleset}/onpolicy_{agent_policy_name}')
+        savepath = Path(f'results/01_baseline_policies/onpolicy_{agent_policy_name}')
     else:
         teacher_policy = baseline_policy_register[teacher_policy_name]
         title = f'Off-policy, agent: {agent_policy_name}, teacher {teacher_policy_name}'
-        savepath = Path(f'results/01_baseline_policies/{ruleset}/offpolicy_agent_{agent_policy_name}_teacher_{teacher_policy_name}')
+        savepath = Path(f'results/01_baseline_policies/offpolicy_agent_{agent_policy_name}_teacher_{teacher_policy_name}')
 
     savepath.mkdir(exist_ok=True, parents=True)
     sanity_check(env_params, agent_policy, dummy_state_init, title, savepath, teacher_policy=teacher_policy, teacher_state_init=dummy_state_init)
 
-def cumulated_rewards_baselines(ruleset: RulesetLiteral):
-    env_params = EnvParams(ruleset=ruleset)
+def cumulated_rewards_baselines():
+    env_params = EnvParams()
     T = env_params.max_num_strokes
     def dummy_state_init(rng_key: Key) -> PolicyState:
         return jnp.zeros(1)
     
     colors = {
-            'ordered_lines_policy': 'darkgreen',
-            'noisy_closest': 'olive',
+            'oracle': 'darkgreen',
+            'noisy_oracle_001': 'olive',
+            'noisy_oracle_003': 'teal',
+            'noisy_oracle_006': 'orange',
             'random': 'r',
             }
     
@@ -65,11 +67,13 @@ def cumulated_rewards_baselines(ruleset: RulesetLiteral):
         ax.fill_between(range(T), y_low, y_high, alpha=.3, color=colors[pol_name])
         ax.plot(mean, label=pol_name, color=colors[pol_name])
     ax.legend(loc='upper left', facecolor=None, edgecolor='gray', bbox_to_anchor=(1.1, 0.8),)
-    fig.savefig(f'results/01_baseline_policies/{ruleset}/cumulated_rewards.png', dpi=600)
+    fig.savefig('results/01_baseline_policies/cumulated_rewards.png', dpi=600)
 
 if __name__ == '__main__':
     Path('results/01_baseline_policies/').mkdir(exist_ok=True)
-    for r in ["along_parametric_directions", "any", "along_cardinal_directions"]:
-        do_sanity_check('noisy_closest', r)
-        do_sanity_check('noisy_ordered', r)
-        cumulated_rewards_baselines(r)
+    for k in baseline_policy_register.keys():
+        do_sanity_check(agent_policy_name=k)
+    do_sanity_check(agent_policy_name='oracle', teacher_policy_name='noisy_oracle')
+    do_sanity_check(agent_policy_name='noisy_oracle', teacher_policy_name='random')
+    do_sanity_check(agent_policy_name='random', teacher_policy_name='oracle')
+    # cumulated_rewards_baselines()

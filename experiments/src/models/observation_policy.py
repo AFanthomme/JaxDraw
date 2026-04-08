@@ -22,6 +22,8 @@ class DecoderConfig:
     mlp_ratio: int = 4
     final_mlp_depth: int=1
 
+
+@eqx.filter_checkpoint
 class SelfAttentionBlock(eqx.Module):
     self_attn: eqx.nn.MultiheadAttention
     mlp: eqx.nn.MLP
@@ -147,10 +149,11 @@ class ObservationPolicy(eqx.Module):
 
 
 decoder_config_register = {
-    "small": DecoderConfig(output_size=3, embed_dim=64, num_heads=4, num_blocks=2, final_mlp_depth=1),
+    "tiny": DecoderConfig(output_size=3, embed_dim=64, num_heads=4, num_blocks=1, final_mlp_depth=1),
+    "small": DecoderConfig(output_size=3, embed_dim=128, num_heads=4, num_blocks=2, final_mlp_depth=1),
     "medium": DecoderConfig(output_size=3, embed_dim=128, num_heads=4, num_blocks=4, final_mlp_depth=1),
+    "medium_wide": DecoderConfig(output_size=3, embed_dim=256, num_heads=4, num_blocks=4, final_mlp_depth=1),
     "big": DecoderConfig(output_size=3, embed_dim=256, num_heads=8, num_blocks=6, final_mlp_depth=1),
     "no_attention": DecoderConfig(output_size=3, embed_dim=256, num_heads=1, num_blocks=0, final_mlp_depth=4),
-    "tiny": DecoderConfig(output_size=3, embed_dim=64, num_heads=1, num_blocks=0, final_mlp_depth=1),
     "single_layer_mlp": DecoderConfig(output_size=3, embed_dim=256, num_heads=1, num_blocks=0, final_mlp_depth=1),
 }
