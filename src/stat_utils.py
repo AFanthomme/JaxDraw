@@ -1,7 +1,8 @@
 import jax.numpy as jnp
 
+
 class RunningStats:
-    def __init__(self, epsilon: float = 1e-4, shape: tuple[int, ...]= (), axis=0):
+    def __init__(self, epsilon: float = 1e-4, shape: tuple[int, ...]=(), hist_bounds=(-10,10), n_bins=1000, axis=0):
         """
         Calculates the running mean and std of a data stream
         https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Parallel_algorithm
@@ -16,6 +17,13 @@ class RunningStats:
         self.max = -jnp.inf * jnp.ones(shape, jnp.float32)
         self.count = epsilon
         self.axis = axis
+
+        # For the histogram
+        self.hist_bounds = hist_bounds
+        self.n_bins = n_bins
+
+        self.bin_counts = jnp.zeros(self.n_bins)
+        self.bin_edges = jnp.linspace(hist_bounds[0], hist_bounds[1], n_bins)
 
     @property
     def std(self):

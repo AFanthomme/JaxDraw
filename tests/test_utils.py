@@ -1,6 +1,6 @@
 import pytest
 import jax
-from experiments.src.stat_utils import RunningStats
+from src.stat_utils import RunningStats
 
 @pytest.mark.parametrize("batch_idx", range(10))
 def test_running_stats(batch_idx):
@@ -23,4 +23,3 @@ def test_running_stats(batch_idx):
     assert jax.numpy.allclose(running_stats.std, ref_std, rtol=1e-5, atol=1e-5)
     assert jax.numpy.allclose(running_stats.min, ref_min, rtol=1e-5, atol=1e-5)
     assert jax.numpy.allclose(running_stats.max, ref_max, rtol=1e-5, atol=1e-5)
-

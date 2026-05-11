@@ -1,6 +1,8 @@
 # IDEs
 .vscode/
 .idea/
+.devcontainer/
+pyrightconfig.json
 
 # Compiled bytecode
 __pycache__/

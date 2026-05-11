@@ -2,7 +2,6 @@ import jax
 import jax.numpy as jnp
 from typing import cast
 from .custom_types import *
-import numpy as np
 
 def _compute_keys(
     strokes: jnp.ndarray, 
@@ -251,22 +250,32 @@ def _compute_stroke_and_pos_from_action(env_state: EnvState, old_position: Coord
     new_line_state = (1-pen_is_down) * default_drawn_line_state + pen_is_down * proposed_line
     return _canonicalize_strokes(new_line_state), new_position
 
-def _compute_reward_from_action(action: Action, env_state: EnvState, env_params: EnvParams) -> Reward:   
+def _compute_reward_from_action(action: Action, env_state: EnvState, env_params: EnvParams) -> Tuple[Reward, StillFollowingOrdering]:   
     old_position = env_state.position
     old_status = env_state.target_strokes_status
+    old_following_ordering = env_state.still_following_ordering
     current_active = jnp.argmax(~old_status)
     new_stroke, _ = _compute_stroke_and_pos_from_action(env_state, old_position, action, env_params)
     new_status, distances = _compute_new_stroke_statuses(new_stroke, env_state, env_params)
 
-    # Rewarded for having drawn the currently active
-    dist_for_reward = distances[current_active]
-    reward_bool = new_status[current_active] & ~jnp.all(old_status)
+    # Rewarded for having drawn the currently active, only if did not already fall off
+    pen_down = (action[2] > 0.)
+    just_drew_active = new_status[current_active] & ~old_status[current_active] 
+    followed_ordering = ~pen_down | just_drew_active
+    new_following_ordering = followed_ordering & old_following_ordering
+
+    # Stop rewards after all is done
+    reward_bool = just_drew_active & new_following_ordering & ~jnp.all(old_status) 
+
     # Penalized for incorrect drawing (same if ordering error or just invalid line)
-    penalty = (action[2] > 0.) * env_params.false_draw_penalty * (reward_bool < .5)
+    incorrect_draw = pen_down & ~reward_bool
+    penalty = incorrect_draw * env_params.false_draw_penalty 
+
     # Introduce some weighting within the binary reward; decays from 1 to .8 on the valid range, then goes to 0 
     # (avoids harsh penalty for small mistakes, while keeping some finetuning signal)
+    dist_for_reward = distances[current_active]
     reward_weighted = reward_bool * (0.9 + 0.1 * jnp.clip(1.-.5*dist_for_reward/env_params.line_done_cutoff, min=0., max=1.))
-    return reward_weighted - penalty
+    return reward_weighted - penalty, new_following_ordering
 
 def _update_env_state_from_action(rng_key: Key, env_state: EnvState, action: Action, env_params: EnvParams) -> EnvState:
     """
@@ -277,12 +286,13 @@ def _update_env_state_from_action(rng_key: Key, env_state: EnvState, action: Act
     latest_stroke, new_position = _compute_stroke_and_pos_from_action(env_state, old_position, action, env_params)
     new_target_stroke_statuses, _ = _compute_new_stroke_statuses(latest_stroke, env_state, env_params)
     new_drawn_strokes = env_state.drawn_strokes.at[env_state.trial_step].set(latest_stroke)
+    _, new_still_following = _compute_reward_from_action(action, env_state, env_params)
     env_state = env_state.replace(drawn_strokes=new_drawn_strokes)
     env_state = env_state.replace(position=new_position)
     env_state = env_state.replace(target_strokes_status=new_target_stroke_statuses)
+    env_state = env_state.replace(still_following_ordering=new_still_following)
     env_state = env_state.replace(trial_step=env_state.trial_step + 1)
     return env_state
-
 
 def _draw_rule_parameters(rule_init_key: Key, env_params: EnvParams) -> Tuple[Array, Array, Array, Array]:
     '''
@@ -299,8 +309,7 @@ def _draw_rule_parameters(rule_init_key: Key, env_params: EnvParams) -> Tuple[Ar
         return sort_mode, decreasing, ref_pos, ref_angle
 
     def draw_rule_params_along_cardinal_directions(key):
-        # Choose one of the 4 directions, no "decreasing" for now
-        mode_key, ref_pos_key, ref_angle_key, decr_key = jax.random.split(key, 4)
+        _, _, ref_angle_key, _ = jax.random.split(key, 4)
         sort_mode = 0
         decreasing = 0
         ref_pos = jnp.zeros(2)
@@ -308,8 +317,7 @@ def _draw_rule_parameters(rule_init_key: Key, env_params: EnvParams) -> Tuple[Ar
         return sort_mode, decreasing, ref_pos, ref_angle
 
     def draw_rule_params_parametric_directions(key):
-        # Choose one of the 4 directions, no "decreasing" for now
-        mode_key, ref_pos_key, ref_angle_key, decr_key = jax.random.split(key, 4)
+        _, _, ref_angle_key, _ = jax.random.split(key, 4)
         sort_mode = 0
         decreasing = 0
         ref_pos = jnp.zeros(2)
@@ -317,20 +325,45 @@ def _draw_rule_parameters(rule_init_key: Key, env_params: EnvParams) -> Tuple[Ar
         return sort_mode, decreasing, ref_pos, ref_angle
 
     def draw_rule_params_parametric_directions_with_decreasing(key):
-        # Choose one of the 4 directions, no "decreasing" for now
-        mode_key, ref_pos_key, ref_angle_key, decr_key = jax.random.split(key, 4)
+        _, _, ref_angle_key, _ = jax.random.split(key, 4)
         sort_mode = 0
         decreasing = jax.random.randint(ref_angle_key, (), minval=0, maxval=2)
-        # decreasing = 1 #jax.random.randint(ref_angle_key, (), minval=0, maxval=2)
         ref_pos = jnp.zeros(2)
+        ref_angle = jax.random.uniform(ref_angle_key, (), minval=0, maxval=2*jnp.pi)
+        return sort_mode, decreasing, ref_pos, ref_angle
+
+    def draw_rule_params_modes_nonzero(key):
+        mode_key, ref_pos_key, ref_angle_key, decr_key = jax.random.split(key, 4)
+        sort_mode = jax.random.randint(mode_key, (), minval=1, maxval=3)
+        decreasing = jax.random.randint(decr_key, (), minval=0, maxval=2)
+        ref_pos = jax.random.uniform(ref_pos_key, (2,), minval=0, maxval=1)
+        ref_angle = jax.random.uniform(ref_angle_key, (), minval=0, maxval=2*jnp.pi)
+        return sort_mode, decreasing, ref_pos, ref_angle
+
+    def draw_rule_params_modes_three_four(key):
+        mode_key, ref_pos_key, ref_angle_key, decr_key = jax.random.split(key, 4)
+        sort_mode = jax.random.randint(mode_key, (), minval=3, maxval=5)
+        decreasing = jax.random.randint(decr_key, (), minval=0, maxval=2)
+        ref_pos = jax.random.uniform(ref_pos_key, (2,), minval=0, maxval=1)
+        ref_angle = jax.random.uniform(ref_angle_key, (), minval=0, maxval=2*jnp.pi)
+        return sort_mode, decreasing, ref_pos, ref_angle
+
+    def draw_rule_params_modes_zero_to_three(key):
+        mode_key, ref_pos_key, ref_angle_key, decr_key = jax.random.split(key, 4)
+        sort_mode = jax.random.randint(mode_key, (), minval=0, maxval=4)
+        decreasing = jax.random.randint(decr_key, (), minval=0, maxval=2)
+        ref_pos = jax.random.uniform(ref_pos_key, (2,), minval=0, maxval=1)
         ref_angle = jax.random.uniform(ref_angle_key, (), minval=0, maxval=2*jnp.pi)
         return sort_mode, decreasing, ref_pos, ref_angle
 
     func_map = {
         "any": draw_rule_params_any,
-        "along_cardinal_directions": draw_rule_params_along_cardinal_directions,
-        "along_parametric_directions" : draw_rule_params_parametric_directions,
-        "along_parametric_directions_with_decreasing" : draw_rule_params_parametric_directions_with_decreasing,
+        "cardinal_directions": draw_rule_params_along_cardinal_directions,
+        "parametric_directions" : draw_rule_params_parametric_directions,
+        "parametric_directions_with_decreasing" : draw_rule_params_parametric_directions_with_decreasing,
+        "modes_nonzero": draw_rule_params_modes_nonzero,
+        "modes_three_four": draw_rule_params_modes_three_four,
+        "modes_zero_to_three": draw_rule_params_modes_zero_to_three,
     }
 
     return func_map[env_params.ruleset](rule_init_key)
@@ -353,14 +386,11 @@ def _initialize_env_state(env_init_key: Key, env_params: EnvParams) -> EnvState:
     target_strokes_status: TargetStrokesStatus = jnp.zeros(n_strokes, dtype=jnp.bool)
     start_pos = jax.random.uniform(start_pos_key, shape=(2,), minval=2*stroke_thickness, maxval=1.-2*stroke_thickness, dtype=jnp.float32)
     trial_step: TrialStep = jnp.array(0)
-
+    still_following: StillFollowingOrdering = jnp.array(1)
     sort_mode, decreasing, ref_point, ref_angle = _draw_rule_parameters(rule_init_key, env_params)
-
-    # vmapped_reorderer = jax.vmap(_reorder_strokes, in_axes=(0,)*5)
-    # reordered_target_strokes = vmapped_reorderer(target_strokes, sort_mode, ref_angle, ref_point, decreasing)
     reordered_target_strokes = _reorder_strokes(target_strokes, sort_mode, ref_angle, ref_point, decreasing)
     state = EnvState(target_strokes=reordered_target_strokes, drawn_strokes=drawn_strokes, position=start_pos, target_strokes_status=target_strokes_status, trial_step=trial_step,
-                     sort_mode=sort_mode, decreasing=decreasing, ref_point=ref_point, ref_angle=ref_angle)
+                     sort_mode=sort_mode, decreasing=decreasing, ref_point=ref_point, ref_angle=ref_angle, still_following_ordering=still_following)
     return state
 
 def batched_generate_obs(env_state: EnvStateBatch, env_params: EnvParams) -> CanvasBatch:
@@ -392,12 +422,12 @@ def _batched_update_states(rng_keys: KeyBatch, env_states: EnvStateBatch, action
     state_batch = jax.vmap(_unwrapped_logic, in_axes=(0, 0, 0, None))(rng_keys, env_states, actions, env_params)
     return state_batch
 
-def _batched_compute_reward_from_action(actions: ActionBatch, env_states: EnvStateBatch, env_params: EnvParams) -> RewardBatch:
+def _batched_compute_reward_from_action(actions: ActionBatch, env_states: EnvStateBatch, env_params: EnvParams) -> Tuple[RewardBatch, StillFollowingOrderingBatch]:
     def _unwrapped_logic(action, state, env_params):
-        reward = _compute_reward_from_action(cast(Action, action), EnvState(**state.__dict__), env_params)
-        return cast(RewardBatch, reward)
-    reward_batch = jax.vmap(_unwrapped_logic, in_axes=(0, 0, None))(actions, env_states, env_params)
-    return reward_batch
+        reward, still_following = _compute_reward_from_action(cast(Action, action), EnvState(**state.__dict__), env_params)
+        return cast(RewardBatch, reward), cast(StillFollowingOrderingBatch, still_following)
+    reward_batch, still_following_batch = jax.vmap(_unwrapped_logic, in_axes=(0, 0, None))(actions, env_states, env_params)
+    return reward_batch, still_following_batch
 
 def _wrap_policy_for_batch(policy: Policy) -> BatchedPolicy:
     def _unwrapped_logic(rng_key, policy_state, env_state, observation, env_params):
@@ -471,8 +501,8 @@ def off_policy_online_rollout(
         new_agent_states, agent_actions = batched_agent_policy(pol_step_keys, old_agent_states, old_env_states, old_obs, env_params)
         new_teacher_states, teacher_actions = batched_teacher_policy(pol_step_keys, old_teacher_states, old_env_states, old_obs, env_params)
         
-        agent_rewards = _batched_compute_reward_from_action(agent_actions, old_env_states, env_params)
-        teacher_rewards = _batched_compute_reward_from_action(teacher_actions, old_env_states, env_params)
+        agent_rewards, _ = _batched_compute_reward_from_action(agent_actions, old_env_states, env_params)
+        teacher_rewards, _ = _batched_compute_reward_from_action(teacher_actions, old_env_states, env_params)
 
         # Only update using the teacher action
         new_env_states = _batched_update_states(env_step_keys, old_env_states, teacher_actions, env_params)
@@ -526,7 +556,7 @@ def offline_replay_actions(env_rng_key: Key[Array, ""], actions: ActionHistory, 
         step_keys = step_input["keys"]
         step_actions = step_input["actions"]
         new_env_state = _batched_update_states(step_keys, env_state, step_actions, env_params)
-        rewards = _batched_compute_reward_from_action(step_actions, env_state, env_params)
+        rewards, _ = _batched_compute_reward_from_action(step_actions, env_state, env_params)
         step_outputs = {"env_state": env_state, "reward": rewards}
         return new_env_state, step_outputs
 

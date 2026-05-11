@@ -6,6 +6,7 @@ RUN python -m pip install -r requirements.txt
 
 COPY ./experiments /app/experiments
 COPY ./tests /app/tests
+COPY ./src /app/src
 ENV PYTHONPATH=/app
 
 RUN apt-get update && apt-get install -y --no-install-recommends fonts-cmu \

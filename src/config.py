@@ -1,22 +1,27 @@
 import jax 
-from typing import Literal
+from typing import Literal, Optional, TypeAlias
 
-# This will be sued to sample the parameters for the rule of each trial
-type RulesetLiteral = Literal[
-    'along_cardinal_directions', # chooses between l2r, r2l, u2d, d2u
-    'along_parametric_directions',
-    'closest_to_center',
-    'closest_to_random_anchor',
-    'monotonic_line_length',
-    'any_nonparametric',
+# Repeat necessary here to have both static typing and the runtime checks
+RULESET_OPTIONS = (
+    'cardinal_directions', 
+    'parametric_directions',
+    'parametric_directions_with_decreasing',
+    'modes_nonzero',
     'any',
-]
+    )
+
+RulesetLiteral: TypeAlias = Literal[
+    'cardinal_directions', 
+    'parametric_directions',
+    'parametric_directions_with_decreasing',
+    'modes_nonzero',
+    'any',
+    ]
 
 @jax.tree_util.register_static
 class EnvParams:
     def __init__(self,
-                num_target_strokes: int = 4,
-                max_num_strokes: int = 10,
+                num_target_strokes: int = 5,
                 size: int = 128,
                 stroke_min_length: float = 0.1,
                 stroke_max_length: float = 0.7,
@@ -24,10 +29,11 @@ class EnvParams:
                 softness: float = 0.03,
                 line_done_cutoff: float = .05,
                 false_draw_penalty: float = .1,
-                ruleset: RulesetLiteral = 'along_cardinal_directions'
+                ruleset: RulesetLiteral = 'cardinal_directions',
+                max_num_strokes: Optional[int] = None, 
                 ):
         self.num_target_strokes = num_target_strokes
-        self.max_num_strokes=max_num_strokes
+        self.max_num_strokes=2*num_target_strokes if max_num_strokes is None else max_num_strokes 
         self.size=size
         self.stroke_min_length=stroke_min_length
         self.stroke_max_length=stroke_max_length
